@@ -3,6 +3,12 @@
 (require 'cl-lib)
 (require 'canvas-browser)
 
+;; The live tests open pages of their own, and would bring back the tabs
+;; you keep and write theirs over them as Emacs ends.
+(setq canvas-browser-keep-tabs nil
+      canvas-browser-tabs-file (make-temp-name
+                                (expand-file-name "canvas-browser-tabs-" temporary-file-directory)))
+
 (defun canvas-browser-live-test--wait (seconds test)
   "Wait up to SECONDS until TEST answers; whether it did."
   (let ((deadline (+ (float-time) seconds)))
