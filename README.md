@@ -147,9 +147,11 @@ Mac with Homebrew, from nothing.
 
 Instead of the clones, `package-vc` can fetch and build the three
 packages. canvas-browser needs the other two, which no archive carries,
-so they come first:
+so they come first. `package-vc` runs the build of a package only when
+`package-vc-allow-build-commands` names it:
 
 ```elisp
+(setq package-vc-allow-build-commands '(canvas-diagram canvas-browser))
 (package-vc-install
  '(canvas-keys :url "https://github.com/Daskeladden/canvas-keys"))
 (package-vc-install
