@@ -4912,6 +4912,19 @@ They are killed afterwards, and the icons known are forgotten."
                        "https://e.org/  https://e.org/")))
       (should (equal (mapcar #'cdr choices) pages)))))
 
+(ert-deftest canvas-browser-x-closes-the-tab-and-shows-the-next ()
+  ;; GIVEN three pages, the middle one shown in the selected window
+  ;; WHEN x is pressed there
+  ;; THEN the middle page is killed, AND the window shows the tab to its
+  ;;      right, as the x of the tab does
+  (should (eq (lookup-key canvas-browser-mode-map "x") #'canvas-browser-close-tab))
+  (canvas-browser-test--with-pages '("*a*" "*b*" "*c*")
+    (switch-to-buffer (nth 1 pages))
+    (call-interactively #'canvas-browser-close-tab)
+    (should-not (buffer-live-p (nth 1 pages)))
+    (should (eq (window-buffer) (nth 2 pages)))
+    (setq pages (list (nth 0 pages) (nth 2 pages)))))
+
 (ert-deftest canvas-browser-c-c-c-t-reads-a-tab-in-both-states ()
   ;; GIVEN the maps of normal and insert state
   ;; WHEN C-c C-t is looked up

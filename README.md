@@ -256,6 +256,7 @@ Normal state keeps the keys of Emacs:
 | `O` | the same in a page buffer of its own, as the `O` of Vimium and qutebrowser opens a tab |
 | `C-<next>`, `C-<prior>` | go to the next and the previous tab, in insert state as well |
 | `C-c C-t` | choose a tab by its title or address, from a list with the icons |
+| `x` | closes this tab, and shows the one to its right |
 | `g` | reads the page again |
 | `M-p`, `M-n` | go back and forward in the history |
 | `n`, `p` | scroll a line further down and back |

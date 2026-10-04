@@ -2726,6 +2726,7 @@ and the settings.  The widths line the columns of the two rows up."
   ["Go"
    ("o" "open" canvas-browser-open-url)
    ("O" "new" canvas-browser)
+   ("x" "close" canvas-browser-close-tab)
    ("g" "reload" canvas-browser-refresh)
    ("b" "back" canvas-browser-back)
    ("F" "forward" canvas-browser-forward)
@@ -2806,7 +2807,8 @@ keys zoom the page.  `g\=' is `revert-buffer\=', which reads it again.")
   ;; The tab keys of a browser; `C-TAB' stays with `tab-bar-mode'.
   "C-<next>" #'tab-line-switch-to-next-tab
   "C-<prior>" #'tab-line-switch-to-prev-tab
-  "C-c C-t" #'canvas-browser-switch-tab)
+  "C-c C-t" #'canvas-browser-switch-tab
+  "x" #'canvas-browser-close-tab)
 
 ;;;; The caret of the page
 
@@ -3787,6 +3789,15 @@ would pick."
       (dolist (window (get-buffer-window-list buffer nil t))
         (set-window-buffer window next)))
     (kill-buffer buffer)))
+
+(defun canvas-browser-close-tab ()
+  "Close the tab of this page, as `x' closes a tab in Vimium.
+A window that showed it shows the tab to its right, as the `×' of the
+tab does."
+  (interactive)
+  (unless (derived-mode-p 'canvas-browser-mode)
+    (user-error "canvas-browser: this buffer is no page"))
+  (canvas-browser--close-tab (current-buffer)))
 
 (defun canvas-browser-new-tab ()
   "Open a page in a new tab, in this window, as `+' of the tabs does."
