@@ -510,30 +510,37 @@ cost two whole cores.
 `canvas-browser-window-strategy` says how chromium gets its window:
 `xvfb`, the default on Linux, is the display of its own above;
 `headless` is no window at all, for a machine with no X server; and
-`minimized`, the default on macOS, is below. `canvas-browser-headless`,
+`offscreen`, the default on macOS, is below. `canvas-browser-headless`,
 the older setting, still means `headless` while the strategy is left at
 its default.
 
 ### On macOS
 
 Chromium on macOS draws on no X display, so `Xvfb` cannot hide it.
-Instead, its window opens on your own screen and is minimized at once.
-This is the default on macOS, so nothing needs to be set.
+Instead, each page opens in a window of its own, made past the
+bottom right corner of your screen. This is the default on macOS, so
+nothing needs to be set.
 
-A minimized window still sends every frame and takes every key, and the
-sites see the same Chrome as with a window on `Xvfb`, with the WebGL of
-the graphics card. A window a page opens, such as one to sign in, is
-minimized as soon as chromium tells of it.
+macOS keeps a part of every window on the screen, so a corner of about
+40 pixels shows there. It is out of sight behind any window that covers
+the corner, such as a large Emacs frame, and the page goes on drawing
+behind it. The sites see the same Chrome as with a window on `Xvfb`,
+with the WebGL of the graphics card.
 
-A document that loads into a minimized window draws nothing until the
-window changes state, so each time a page moves to a new document its
-window is restored and minimized again at once.
+A window a page opens, such as one to sign in, opens where chromium
+likes and is moved to the corner as soon as chromium tells of it, a few
+hundredths of a second later. Chrome comes to the front with each window
+it opens, and Emacs takes the focus back.
 
-The minimized windows sit in the Dock, and Chrome is in the Dock and in
-`Cmd-Tab` while it runs. A tiling window manager such as Amethyst moves
-and restores windows on its own, and then pages stop drawing: leave this
-Chrome out of it. Using Chromium or Chrome for Testing here keeps it
-apart from the Chrome you browse with.
+A window that is minimized, or whose application is hidden, would show
+nothing at all, but a page loaded into it draws nothing either: macOS
+tells chromium that the window is not visible. So the windows stay in
+the corner.
+
+Chrome is in the Dock and in `Cmd-Tab` while it runs. A tiling window
+manager such as Amethyst moves windows on its own: leave this Chrome out
+of it. Using Chromium or Chrome for Testing here keeps it apart from the
+Chrome you browse with.
 
 ## Settings
 
@@ -542,7 +549,7 @@ apart from the Chrome you browse with.
 | `canvas-browser-chromium` | chromium, chromium-browser, google-chrome, and the apps of Chromium and Google Chrome on macOS | the names looked for |
 | `canvas-browser-profile-directory` | by the chromium found | where the profile goes |
 | `canvas-browser-cdp-timeout` | 10 | seconds to wait for chromium |
-| `canvas-browser-window-strategy` | minimized on macOS, else xvfb | how chromium gets its window: xvfb, headless or minimized |
+| `canvas-browser-window-strategy` | offscreen on macOS, else xvfb | how chromium gets its window: xvfb, headless or offscreen |
 | `canvas-browser-headless` | nil | the older way to say headless |
 | `canvas-browser-display` | :98 | the X display chromium draws its window on |
 | `canvas-browser-quality` | 70 | the quality of a moving frame, from 1 to 100 |

@@ -232,37 +232,38 @@
   ;; WHEN the strategy is left at the default of Linux or of macOS, and
   ;;      then chosen
   ;; THEN the old setting makes it headless, AND a strategy chosen wins
-  (dolist (system '((gnu/linux . xvfb) (darwin . minimized)))
+  (dolist (system '((gnu/linux . xvfb) (darwin . offscreen)))
     (let ((system-type (car system))
           (canvas-browser-headless t)
           (canvas-browser-window-strategy (cdr system)))
       (should (eq (canvas-browser-cdp-window-strategy) 'headless))))
   (let ((system-type 'gnu/linux)
         (canvas-browser-headless t)
-        (canvas-browser-window-strategy 'minimized))
-    (should (eq (canvas-browser-cdp-window-strategy) 'minimized)))
+        (canvas-browser-window-strategy 'offscreen))
+    (should (eq (canvas-browser-cdp-window-strategy) 'offscreen)))
   (let ((system-type 'gnu/linux)
         (canvas-browser-headless nil)
         (canvas-browser-window-strategy 'xvfb))
     (should (eq (canvas-browser-cdp-window-strategy) 'xvfb))))
 
-(ert-deftest canvas-browser-cdp-macos-keeps-its-window-minimized-by-default ()
+(ert-deftest canvas-browser-cdp-macos-keeps-its-window-off-screen-by-default ()
   ;; GIVEN macOS, where chromium draws on no X display, and then Linux
   ;; WHEN nothing is set
-  ;; THEN the window is kept minimized on macOS, AND Linux keeps Xvfb
+  ;; THEN the window goes off screen on macOS, AND Linux keeps Xvfb
   (let ((system-type 'darwin))
-    (should (eq (canvas-browser-cdp--default-window-strategy) 'minimized)))
+    (should (eq (canvas-browser-cdp--default-window-strategy) 'offscreen)))
   (let ((system-type 'gnu/linux))
     (should (eq (canvas-browser-cdp--default-window-strategy) 'xvfb))))
 
-(ert-deftest canvas-browser-cdp-a-minimized-chromium-needs-no-display ()
-  ;; GIVEN windows kept minimized on your own screen, as on macOS
+(ert-deftest canvas-browser-cdp-a-chromium-off-screen-needs-no-display ()
+  ;; GIVEN windows off screen, as on macOS
   ;; WHEN chromium is started
-  ;; THEN it has a window, unthrottled, AND no Xvfb is started, no
-  ;;      DISPLAY is given, and WebGL is left to the graphics card
+  ;; THEN it has a window, unthrottled, but none at the start, AND no
+  ;;      Xvfb is started, no DISPLAY is given, and WebGL is left to the
+  ;;      graphics card
   (let ((started nil) (xvfb nil)
         (canvas-browser-headless nil)
-        (canvas-browser-window-strategy 'minimized)
+        (canvas-browser-window-strategy 'offscreen)
         (canvas-browser-cdp--socket nil)
         (canvas-browser-cdp--process nil))
     (cl-letf (((symbol-function 'executable-find) (lambda (name) (concat "/usr/bin/" name)))
@@ -276,69 +277,82 @@
       (canvas-browser-cdp-start)
       (should-not xvfb)
       (should-not (member "--headless=new" started))
+      (should (member "--no-startup-window" started))
       (should (member "--disable-backgrounding-occluded-windows" started))
       (should (member "--disable-blink-features=AutomationControlled" started))
       (should-not (member "--enable-unsafe-swiftshader" started))
       (should (equal (canvas-browser-cdp--environment) process-environment)))))
 
-(ert-deftest canvas-browser-cdp-a-window-is-minimized-only-when-asked ()
-  ;; GIVEN a page T1, with windows kept minimized, and then on Xvfb
-  ;; WHEN its window is to be minimized
-  ;; THEN chromium is asked for the window of T1 and to minimize it,
-  ;;      AND on Xvfb, where nobody sees the window, nothing is sent
+(ert-deftest canvas-browser-cdp-a-page-off-screen-opens-a-window-out-of-sight ()
+  ;; GIVEN windows off screen, and then on Xvfb
+  ;; WHEN a page is to open, in a window of its own or not
+  ;; THEN off screen it always opens a window of its own, made far past
+  ;;      the corner, AND on Xvfb it does so only when asked
+  (let ((canvas-browser-headless nil)
+        (canvas-browser-window-strategy 'offscreen))
+    (dolist (new-window '(nil t))
+      (let ((window (canvas-browser-cdp-target-window new-window)))
+        (should (eq (plist-get window :newWindow) t))
+        (should (> (plist-get window :left) 10000))
+        (should (> (plist-get window :top) 10000)))))
+  (let ((canvas-browser-headless nil)
+        (canvas-browser-window-strategy 'xvfb))
+    (should-not (canvas-browser-cdp-target-window nil))
+    (should (equal (canvas-browser-cdp-target-window t) '(:newWindow t)))))
+
+(defun canvas-browser-cdp-test--put-away (state)
+  "Put the window of T1 away, its window being in STATE; what was sent.
+The answer about the window comes at once."
+  (canvas-browser-cdp-put-away-window "T1")
+  (let ((asked (car canvas-browser-test--sent)))
+    (should (equal (plist-get asked :method) "Browser.getWindowForTarget"))
+    (should (equal (plist-get (plist-get asked :params) :targetId) "T1"))
+    (canvas-browser-cdp--receive
+     (json-encode (list :id (plist-get asked :id)
+                        :result (list :windowId 7 :bounds (list :windowState state)))))
+    (cdr (member asked (reverse canvas-browser-test--sent)))))
+
+(ert-deftest canvas-browser-cdp-a-window-goes-off-screen-only-when-asked ()
+  ;; GIVEN a page T1 in a window of its normal state, then one the reader
+  ;;       has minimized, with windows off screen, and then on Xvfb
+  ;; WHEN its window is to be put away
+  ;; THEN the normal window is moved far past the corner, AND the other
+  ;;      is left as it is, AND on Xvfb, where nobody sees the window,
+  ;;      nothing is sent
   (canvas-browser-test--with-stub
     (let ((canvas-browser-headless nil)
-          (canvas-browser-window-strategy 'minimized))
-      (canvas-browser-cdp-minimize-window "T1")
-      (let ((asked (car canvas-browser-test--sent)))
-        (should (equal (plist-get asked :method) "Browser.getWindowForTarget"))
-        (should (equal (plist-get (plist-get asked :params) :targetId) "T1"))
-        (canvas-browser-cdp--receive
-         (json-encode (list :id (plist-get asked :id) :result '(:windowId 7)))))
-      (let ((bounds (car canvas-browser-test--sent)))
-        (should (equal (plist-get bounds :method) "Browser.setWindowBounds"))
-        (should (equal (plist-get bounds :params)
-                       '(:windowId 7 :bounds (:windowState "minimized"))))))
+          (canvas-browser-window-strategy 'offscreen))
+      (let ((moved (canvas-browser-cdp-test--put-away "normal")))
+        (should (equal (mapcar (lambda (sent) (plist-get sent :method)) moved)
+                       '("Browser.setWindowBounds")))
+        (should (equal (plist-get (car moved) :params)
+                       (list :windowId 7 :bounds canvas-browser-cdp--offscreen))))
+      (setq canvas-browser-test--sent nil)
+      (should-not (canvas-browser-cdp-test--put-away "minimized")))
     (setq canvas-browser-test--sent nil)
     (let ((canvas-browser-headless nil)
           (canvas-browser-window-strategy 'xvfb))
-      (canvas-browser-cdp-minimize-window "T1")
+      (canvas-browser-cdp-put-away-window "T1")
       (should-not canvas-browser-test--sent))))
 
-(ert-deftest canvas-browser-cdp-a-woken-window-is-restored-and-minimized-again ()
-  ;; GIVEN a page T1 whose window is kept minimized, and then one on Xvfb
-  ;; WHEN its window is woken, as after the page moved to a new document
-  ;; THEN the window is restored and minimized at once, AND minimized once
-  ;;      more a moment later, in case macOS restored it after all,
-  ;;      AND on Xvfb nothing is sent
+(ert-deftest canvas-browser-cdp-emacs-takes-the-focus-back-from-a-window ()
+  ;; GIVEN windows off screen, and a frame of Emacs on macOS
+  ;; WHEN chromium has opened a window, which takes the focus
+  ;; THEN the frame of Emacs takes it back, AND a frame on a terminal,
+  ;;      where chromium takes nothing, is left alone
   (canvas-browser-test--with-stub
     (let ((canvas-browser-headless nil)
-          (canvas-browser-window-strategy 'minimized)
-          (later nil))
-      (cl-letf (((symbol-function 'run-at-time)
-                 (lambda (_time _repeat function) (push function later))))
-        (canvas-browser-cdp-wake-window "T1")
-        (let ((asked (car canvas-browser-test--sent)))
-          (canvas-browser-cdp--receive
-           (json-encode (list :id (plist-get asked :id) :result '(:windowId 7)))))
-        (should (equal (mapcar (lambda (sent)
-                                 (plist-get (plist-get (plist-get sent :params) :bounds)
-                                            :windowState))
-                               (reverse (seq-filter
-                                         (lambda (sent) (equal (plist-get sent :method)
-                                                               "Browser.setWindowBounds"))
-                                         canvas-browser-test--sent)))
-                       '("normal" "minimized")))
-        (setq canvas-browser-test--sent nil)
-        (should (= (length later) 1))
-        (funcall (car later))
-        (should (equal (plist-get (car canvas-browser-test--sent) :method)
-                       "Browser.getWindowForTarget"))))
-    (setq canvas-browser-test--sent nil)
-    (let ((canvas-browser-headless nil)
-          (canvas-browser-window-strategy 'xvfb))
-      (canvas-browser-cdp-wake-window "T1")
-      (should-not canvas-browser-test--sent))))
+          (canvas-browser-window-strategy 'offscreen)
+          (focused nil))
+      (cl-letf (((symbol-function 'select-frame-set-input-focus)
+                 (lambda (frame &rest _) (push frame focused))))
+        (cl-letf (((symbol-function 'framep) (lambda (_frame) 'ns)))
+          (canvas-browser-cdp-test--put-away "normal"))
+        (should (equal focused (list (selected-frame))))
+        (setq focused nil)
+        (cl-letf (((symbol-function 'framep) (lambda (_frame) t)))
+          (canvas-browser-cdp-test--put-away "normal"))
+        (should-not focused)))))
 
 (ert-deftest canvas-browser-cdp-start-runs-chromium-headless-once ()
   ;; GIVEN a stubbed process and websocket

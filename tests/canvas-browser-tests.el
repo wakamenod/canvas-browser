@@ -2396,55 +2396,38 @@ selection at once."
     (should (equal (canvas-browser-test--params "Target.setDiscoverTargets")
                    '(:discover t)))))
 
-(ert-deftest canvas-browser-every-window-is-minimized-when-asked ()
-  ;; GIVEN a page buffer, with windows kept minimized on your own screen
+(ert-deftest canvas-browser-every-window-is-put-away-when-asked ()
+  ;; GIVEN a page buffer
   ;; WHEN chromium tells of a page its page opened, of a page nobody
-  ;;      opened, such as its first tab, and of a worker
-  ;; THEN the window of each page is minimized, AND the worker, which
-  ;;      has no window, is left alone
+  ;;      opened, and of a worker
+  ;; THEN the window of each page is put out of sight, should the window
+  ;;      strategy say so, AND the worker, which has no window, is left
+  ;;      alone
   (canvas-browser-test--in-page
-    (let ((minimized nil))
-      (cl-letf (((symbol-function 'canvas-browser-cdp-minimize-window)
-                 (lambda (target) (push target minimized))))
+    (let ((put-away nil))
+      (cl-letf (((symbol-function 'canvas-browser-cdp-put-away-window)
+                 (lambda (target) (push target put-away))))
         (unwind-protect
             (progn
               (canvas-browser-test--created "P1" "page" canvas-browser--target)
               (canvas-browser-test--created "P2" "page" nil)
               (canvas-browser-test--created "W1" "service_worker" nil)
-              (should (equal (reverse minimized) '("P1" "P2"))))
+              (should (equal (reverse put-away) '("P1" "P2"))))
           (when-let* ((opened (canvas-browser--buffer-of-target "P1")))
             (kill-buffer opened)))))))
 
-(ert-deftest canvas-browser-a-page-that-moves-wakes-its-window ()
-  ;; GIVEN a page buffer
-  ;; WHEN the page moves to a new document, and then a frame inside it does
-  ;; THEN the window of the page is woken the first time, since a new
-  ;;      document in a minimized window draws nothing until it is,
-  ;;      AND not for the frame, whose page goes on drawing
-  (canvas-browser-test--in-page
-    (let ((woken nil))
-      (cl-letf (((symbol-function 'canvas-browser-cdp-wake-window)
-                 (lambda (target) (push target woken))))
-        (canvas-browser--frame-navigated (list :frame '(:id "F1") :type "Navigation"))
-        (should (equal woken (list canvas-browser--target)))
-        (canvas-browser--frame-navigated (list :frame '(:id "F2" :parentId "F1")
-                                               :type "Navigation"))
-        (should (= (length woken) 1))))))
-
-(ert-deftest canvas-browser-a-window-a-page-opens-is-woken-once-attached ()
-  ;; GIVEN a page buffer, whose target is T1
-  ;; WHEN T1 opens the page P1, which has loaded before anyone listened
-  ;; THEN the window of P1 is woken once a session is attached to it
-  (canvas-browser-test--in-page
-    (let ((woken nil))
-      (cl-letf (((symbol-function 'canvas-browser-cdp-wake-window)
-                 (lambda (target) (push target woken))))
-        (unwind-protect
-            (progn
-              (canvas-browser-test--created "P1" "page" canvas-browser--target)
-              (should (member "P1" woken)))
-          (when-let* ((opened (canvas-browser--buffer-of-target "P1")))
-            (kill-buffer opened)))))))
+(ert-deftest canvas-browser-a-page-off-screen-opens-in-a-window-out-of-sight ()
+  ;; GIVEN windows off screen, as on macOS
+  ;; WHEN a page is opened
+  ;; THEN chromium opens it in a window of its own, far past the corner
+  (let ((canvas-browser-headless nil)
+        (canvas-browser-window-strategy 'offscreen))
+    (canvas-browser-test--in-page
+      (let ((created (canvas-browser-test--params "Target.createTarget")))
+        (should (equal (plist-get created :url) "about:blank"))
+        (should (eq (plist-get created :newWindow) t))
+        (should (equal (plist-get created :left)
+                       (plist-get canvas-browser-cdp--offscreen :left)))))))
 
 (ert-deftest canvas-browser-a-window-a-page-opens-gets-a-buffer-of-its-own ()
   ;; GIVEN a page buffer, whose target is T1
@@ -2703,9 +2686,10 @@ selection at once."
 (ert-deftest canvas-browser-a-page-of-its-own-opens-as-a-tab ()
   ;; GIVEN a page opened in a buffer of its own
   ;; THEN chromium opens it as a tab, not in a window of its own
-  (canvas-browser-test--in-page
-    (should (equal (canvas-browser-test--params "Target.createTarget")
-                   '(:url "about:blank")))))
+  (let ((canvas-browser-window-strategy 'xvfb))
+    (canvas-browser-test--in-page
+      (should (equal (canvas-browser-test--params "Target.createTarget")
+                     '(:url "about:blank"))))))
 
 (defmacro canvas-browser-test--embedded (page text host &rest body)
   "Embed a page of 400 by 225 in HOST, a new buffer; run BODY.
@@ -2734,24 +2718,25 @@ which BODY may insert.  A frame that can show a canvas is assumed."
   ;; THEN the text to insert shows the page's canvas at that size, under a
   ;;      pointing hand, AND the page is in a hidden buffer of its own that does not claim the
   ;;      keys, AND chromium opens it in a window of its own and goes to it
-  (canvas-browser-test--embedded page text host
-    (should (eq 'hand (get-text-property 0 'pointer text)))
-    (let ((canvas (get-text-property 0 'display text)))
-      (should (eq canvas (buffer-local-value 'canvas-browser--canvas page)))
-      (should (equal (plist-get (cdr canvas) :data-width) 400))
-      (should (equal (plist-get (cdr canvas) :data-height) 225)))
-    (should (string-prefix-p " " (buffer-name page)))
-    (should (eq host (buffer-local-value 'canvas-browser--host page)))
-    ;; The keys stay with the page you browse: chromium sends them to
-    ;; none when two pages claim the focus.
-    (should-not (equal (canvas-browser-test--params "Emulation.setFocusEmulationEnabled")
-                       '(:enabled t)))
-    ;; A window of its own keeps it in front: a tab behind another is
-    ;; hidden, and chromium stops drawing its video.
-    (should (equal (canvas-browser-test--params "Target.createTarget")
-                   '(:url "about:blank" :newWindow t)))
-    (should (equal (canvas-browser-test--params "Page.navigate")
-                   '(:url "https://example.org/video")))))
+  (let ((canvas-browser-window-strategy 'xvfb))
+    (canvas-browser-test--embedded page text host
+      (should (eq 'hand (get-text-property 0 'pointer text)))
+      (let ((canvas (get-text-property 0 'display text)))
+        (should (eq canvas (buffer-local-value 'canvas-browser--canvas page)))
+        (should (equal (plist-get (cdr canvas) :data-width) 400))
+        (should (equal (plist-get (cdr canvas) :data-height) 225)))
+      (should (string-prefix-p " " (buffer-name page)))
+      (should (eq host (buffer-local-value 'canvas-browser--host page)))
+      ;; The keys stay with the page you browse: chromium sends them to
+      ;; none when two pages claim the focus.
+      (should-not (equal (canvas-browser-test--params "Emulation.setFocusEmulationEnabled")
+                         '(:enabled t)))
+      ;; A window of its own keeps it in front: a tab behind another is
+      ;; hidden, and chromium stops drawing its video.
+      (should (equal (canvas-browser-test--params "Target.createTarget")
+                     '(:url "about:blank" :newWindow t)))
+      (should (equal (canvas-browser-test--params "Page.navigate")
+                     '(:url "https://example.org/video"))))))
 
 (ert-deftest canvas-browser-embed-needs-a-canvas ()
   ;; GIVEN a frame that cannot show a canvas

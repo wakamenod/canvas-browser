@@ -706,13 +706,10 @@ second one with an error that it is active already."
 Chromium restores a page from its back and forward cache without the
 dark it forces on a page that has no dark of its own, though the page
 still hears that the reader prefers dark.  So the dark is told again
-after a restore of the page itself.  A navigation to a new page keeps it.
-A new document in a minimized window draws nothing until its window is
-woken, so the window of the page is woken whenever the page moves."
-  (when (null (plist-get (plist-get params :frame) :parentId))
-    (canvas-browser-cdp-wake-window canvas-browser--target)
-    (when (equal (plist-get params :type) "BackForwardCacheRestore")
-      (canvas-browser--apply-dark))))
+after a restore of the page itself.  A navigation to a new page keeps it."
+  (when (and (null (plist-get (plist-get params :frame) :parentId))
+             (equal (plist-get params :type) "BackForwardCacheRestore"))
+    (canvas-browser--apply-dark)))
 
 (defun canvas-browser--loaded (_params)
   "Ask the page that has loaded for its title, for the header line.
@@ -769,12 +766,7 @@ does: it was opened at its address."
              (canvas-browser--watch-fullscreen))
            (when url
              (canvas-browser--tell "Page.navigate" (list :url url)))
-           (canvas-browser--start-screencast)
-           ;; A window another page opened loaded its document before
-           ;; anyone listened for its navigation, and it may have been
-           ;; minimized by then.
-           (unless url
-             (canvas-browser-cdp-wake-window canvas-browser--target))))))))
+           (canvas-browser--start-screencast)))))))
 
 (defun canvas-browser--buffer-of-target (target)
   "The page buffer that shows TARGET, or nil."
@@ -821,14 +813,13 @@ it, since the host finds it by that name."
 (defun canvas-browser--target-created (params)
   "Show the page of PARAMS in a buffer of its own, if one of ours opened it.
 A frame, a worker, or a page of nobody\='s here is left alone, but the
-window of any page is minimized when `canvas-browser-window-strategy\='
-says so.  Chromium tells of the pages it has already when it is first
-asked, so this finds its first window too."
+window of any page is put out of sight when
+`canvas-browser-window-strategy\=' says so."
   (let* ((info (plist-get params :targetInfo))
          (target (plist-get info :targetId))
          (opener (canvas-browser--buffer-of-target (plist-get info :openerId))))
     (when (equal (plist-get info :type) "page")
-      (canvas-browser-cdp-minimize-window target))
+      (canvas-browser-cdp-put-away-window target))
     (when (and opener
                (equal (plist-get info :type) "page")
                (not (canvas-browser--buffer-of-target target)))
@@ -869,10 +860,10 @@ it again."
      "Target.createTarget"
      ;; A tab behind another is hidden, and chromium stops drawing its
      ;; video.  A page embedded elsewhere is in no window of Emacs that
-     ;; brings it to the front, so it gets a window of its own.
-     (if canvas-browser--host
-         (list :url "about:blank" :newWindow t)
-       (list :url "about:blank"))
+     ;; brings it to the front, so it gets a window of its own.  Off
+     ;; your screen every page does.
+     (cons :url (cons "about:blank"
+                      (canvas-browser-cdp-target-window canvas-browser--host)))
      (lambda (result)
        (when-let* ((target (plist-get result :targetId))
                    ((buffer-live-p buffer)))
