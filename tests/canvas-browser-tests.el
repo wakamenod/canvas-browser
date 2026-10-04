@@ -4583,3 +4583,358 @@ Return the dired buffer in which they are picked."
   (should (eq 'canvas-browser-open-bookmark
               (plist-get (canvas-browser-test--menu-entry "J") :command))))
 
+
+;;;; The tabs of the pages
+
+(defmacro canvas-browser-test--with-pages (names &rest body)
+  "Run BODY with page buffers of NAMES, made in that order, bound to `pages'.
+They are killed afterwards, and the icons known are forgotten."
+  (declare (indent 1))
+  `(let ((canvas-browser--icons (make-hash-table :test #'equal))
+         (canvas-browser--site-icons (make-hash-table :test #'equal))
+         (pages nil))
+     (unwind-protect
+         (progn
+           (dolist (name ,names)
+             (let ((buffer (generate-new-buffer name)))
+               (with-current-buffer buffer (canvas-browser-mode))
+               (setq pages (append pages (list buffer)))))
+           ,@body)
+       (mapc #'kill-buffer pages))))
+
+(ert-deftest canvas-browser-the-tabs-are-the-pages-in-the-order-they-opened ()
+  ;; GIVEN three pages, an embedded page and a buffer of no page
+  ;; WHEN the first page is shown last, as switching to it does
+  ;; THEN the tabs are the three pages, in the order they were opened:
+  ;;      tabs that moved about whenever one was shown could not be clicked
+  (canvas-browser-test--with-pages '("*a*" "*b*" " *canvas-browser embed: c*" "*d*")
+    (with-temp-buffer
+      (switch-to-buffer (car pages))
+      (should (equal (canvas-browser--tab-buffers)
+                     (list (nth 0 pages) (nth 1 pages) (nth 3 pages)))))))
+
+(ert-deftest canvas-browser-a-page-has-a-line-of-tabs ()
+  ;; GIVEN a page buffer, and an embedded one
+  ;; WHEN they are made
+  ;; THEN the page shows the tabs of the pages, with their own faces, and
+  ;;      the embedded page shows none: it belongs to the buffer it is in
+  (canvas-browser-test--with-pages '("*a*" " *canvas-browser embed: b*")
+    (with-current-buffer (car pages)
+      (should tab-line-mode)
+      (should (eq tab-line-tabs-function #'canvas-browser--tab-buffers))
+      (should (memq 'canvas-browser-tab-current
+                    (assq 'tab-line-tab-current face-remapping-alist))))
+    (with-current-buffer (cadr pages)
+      (should-not tab-line-mode))))
+
+(ert-deftest canvas-browser-the-line-of-tabs-can-be-turned-off ()
+  ;; GIVEN `canvas-browser-tabs' off
+  ;; WHEN a page is made
+  ;; THEN it shows no line of tabs, but its keys still switch between pages
+  (let ((canvas-browser-tabs nil))
+    (canvas-browser-test--with-pages '("*a*")
+      (with-current-buffer (car pages)
+        (should-not tab-line-mode)
+        (should (eq tab-line-tabs-function #'canvas-browser--tab-buffers))
+        (should (eq (key-binding (kbd "C-<next>")) #'tab-line-switch-to-next-tab))))))
+
+(ert-deftest canvas-browser-the-tab-keys-work-while-typing-in-the-page ()
+  ;; GIVEN a page in insert state
+  ;; WHEN C-<next> and C-<prior> are looked up
+  ;; THEN they switch tabs, as they do in a browser while typing in a field
+  (should (eq (lookup-key canvas-browser-insert-map (kbd "C-<next>"))
+              #'tab-line-switch-to-next-tab))
+  (should (eq (lookup-key canvas-browser-insert-map (kbd "C-<prior>"))
+              #'tab-line-switch-to-prev-tab)))
+
+(ert-deftest canvas-browser-a-tab-is-named-by-its-title-cut-short ()
+  ;; GIVEN a page with a long title, and one with no title yet
+  ;; WHEN their tabs are named
+  ;; THEN the first is named by its title, cut to `canvas-browser-tab-width'
+  ;;      with an ellipsis, AND the second by its address
+  (let ((canvas-browser-tab-width 10)
+        (canvas-browser-tab-icons nil))
+    (canvas-browser-test--with-pages '("*a*" "*b*")
+      (with-current-buffer (nth 0 pages)
+        (setq canvas-browser--title "A title far longer than a tab"))
+      (with-current-buffer (nth 1 pages)
+        (setq canvas-browser--url "e.org/a"))
+      (let ((first (string-trim (canvas-browser--tab-name (nth 0 pages))))
+            (second (string-trim (canvas-browser--tab-name (nth 1 pages)))))
+        (should (<= (string-width first) 10))
+        (should (string-prefix-p "A title" first))
+        (should (equal second "e.org/a"))))))
+
+(ert-deftest canvas-browser-a-tab-shows-the-icon-of-its-page ()
+  ;; GIVEN a page whose icon is known
+  ;; WHEN its tab is named
+  ;; THEN the name begins with the icon, shown as an image
+  (canvas-browser-test--with-pages '("*a*")
+    (with-current-buffer (car pages)
+      (setq canvas-browser--title "Example"
+            canvas-browser--icon (canvas-browser--icon-spec canvas-browser--blank-icon-svg 'svg)))
+    (let* ((name (canvas-browser--tab-name (car pages)))
+           (start (string-match-p "[^ ]" name))
+           (shown nil))
+      (dotimes (i (length name))
+        (when (eq (get-text-property i 'display name)
+                  (buffer-local-value 'canvas-browser--icon (car pages)))
+          (setq shown i)))
+      (should shown)
+      (should (< shown (string-search "Example" name)))
+      (should start))))
+
+(ert-deftest canvas-browser-a-tab-is-drawn-again-when-its-title-changes ()
+  ;; GIVEN the tabs of two pages
+  ;; WHEN the second page gives a title, or gets its icon
+  ;; THEN the keys tab-line keeps the line for change, though the buffers
+  ;;      are the same buffers
+  (canvas-browser-test--with-pages '("*a*" "*b*")
+    (let* ((tabs (canvas-browser--tab-buffers))
+           (before (canvas-browser--tab-cache-key tabs)))
+      (with-current-buffer (nth 1 pages) (setq canvas-browser--title "Now titled"))
+      (let ((titled (canvas-browser--tab-cache-key tabs)))
+        (should-not (equal before titled))
+        ;; Tab-line reads the buffer name and the scroll by their place.
+        (should (equal (nth 1 titled) (nth 1 (tab-line-cache-key-default tabs))))
+        (with-current-buffer (nth 1 pages) (setq canvas-browser--icon-url "https://b/i.png"))
+        (should-not (equal titled (canvas-browser--tab-cache-key tabs)))))))
+
+(ert-deftest canvas-browser-closing-a-tab-shows-the-next-one ()
+  ;; GIVEN three pages, the middle one shown
+  ;; WHEN its tab is closed
+  ;; THEN the page is killed AND the window shows the tab to its right;
+  ;;      closing the last tab shows the one to its left, as a browser does
+  (canvas-browser-test--with-pages '("*a*" "*b*" "*c*")
+    (cl-letf (((symbol-function 'canvas-browser--release) #'ignore))
+      (switch-to-buffer (nth 1 pages))
+      (canvas-browser--close-tab (nth 1 pages))
+      (should-not (buffer-live-p (nth 1 pages)))
+      (should (eq (window-buffer) (nth 2 pages)))
+      (canvas-browser--close-tab (nth 2 pages))
+      (should (eq (window-buffer) (nth 0 pages))))))
+
+(ert-deftest canvas-browser-a-new-tab-opens-in-the-same-window ()
+  ;; GIVEN one window
+  ;; WHEN the + of the tabs opens a page
+  ;; THEN `canvas-browser' is asked for it in this window, not another
+  (let (action)
+    (cl-letf (((symbol-function 'canvas-browser)
+               (lambda (_url) (interactive (list "e.org"))
+                 (setq action display-buffer-overriding-action))))
+      (canvas-browser-new-tab))
+    (should (equal action '(display-buffer-same-window)))))
+
+;;;; The icons of the pages
+
+(defconst canvas-browser-test--ico
+  (concat (unibyte-string 0 0 1 0 1 0)
+          ;; One picture, 1 by 1, of 32 bits, 48 bytes from byte 22.
+          (unibyte-string 1 1 0 0 1 0 32 0 48 0 0 0 22 0 0 0)
+          ;; Its header: 40 bytes, 1 wide, twice 1 high for the mask.
+          (unibyte-string 40 0 0 0 1 0 0 0 2 0 0 0 1 0 32 0)
+          (make-string 24 0)
+          ;; The pixel, blue green red alpha, then the mask of its row.
+          (unibyte-string #x30 #x20 #xff #xff 0 0 0 0))
+  "An ICO of one red pixel, as /favicon.ico serves.
+Its red is ff2030.")
+
+(ert-deftest canvas-browser-the-type-of-an-icon-is-known-by-its-bytes ()
+  ;; GIVEN the bytes of a PNG, an SVG, an ICO and of nothing
+  ;; WHEN their type is asked
+  ;; THEN they are png, svg, ico and nil
+  (should (eq (canvas-browser--icon-type
+               (concat canvas-browser--png-signature (make-string 20 0)))
+              'png))
+  (should (eq (canvas-browser--icon-type canvas-browser--blank-icon-svg) 'svg))
+  (should (eq (canvas-browser--icon-type canvas-browser-test--ico) 'ico))
+  (should-not (canvas-browser--icon-type "")))
+
+(ert-deftest canvas-browser-an-ico-is-shown-as-a-png ()
+  ;; GIVEN the bytes of an ICO, which Emacs cannot read
+  ;; WHEN it is made an icon
+  ;; THEN it is a PNG, drawn by canvas-cairo, of the same red
+  (let ((image (canvas-browser--icon-image canvas-browser-test--ico)))
+    (should (eq (plist-get (cdr image) :type) 'png))
+    (let ((png (plist-get (cdr image) :data))
+          (file (make-temp-file "canvas-browser-test-" nil ".png"))
+          (context (canvas-cairo-context
+                    (list 'image :type 'canvas :id (make-symbol "test")
+                          :data-width 4 :data-height 4))))
+      (unwind-protect
+          (progn
+            (should (string-prefix-p canvas-browser--png-signature png))
+            (let ((coding-system-for-write 'binary))
+              (write-region png nil file nil 'silent))
+            (canvas-cairo-image context file 0 0 4 4)
+            ;; The one pixel is spread over the whole, and blurred at
+            ;; its edges, so its red is looked for rather than its value.
+            (let ((pixel (canvas-cairo-pixel context 2 2)))
+              (should (> (logand (ash pixel -16) #xff) #x90))
+              (should (< (logand (ash pixel -8) #xff) #x40))
+              (should (< (logand pixel #xff) #x40))))
+        (canvas-cairo-destroy context)
+        (delete-file file)))))
+
+(ert-deftest canvas-browser-what-is-no-picture-is-no-icon ()
+  ;; GIVEN bytes that are no picture, as a page of an error
+  ;; WHEN they are made an icon
+  ;; THEN there is none, and the tab shows the globe
+  (should-not (canvas-browser--icon-image "<html>Not found</html>")))
+
+(ert-deftest canvas-browser-an-icon-is-fetched-once-for-every-page ()
+  ;; GIVEN two pages of a site, that name the same icon
+  ;; WHEN both ask for it before it has come, and a third page later
+  ;; THEN it is fetched once, AND every page shows it once it comes
+  (canvas-browser-test--with-pages '("*a*" "*b*" "*c*")
+    (let ((fetched nil))
+      (cl-letf (((symbol-function 'canvas-browser--fetch-icon)
+                 (lambda (url then) (push (cons url then) fetched))))
+        (dolist (page (seq-take pages 2))
+          (with-current-buffer page
+            (setq canvas-browser--url "https://e.org/a")
+            (canvas-browser--take-icon-url "https://e.org/icon.ico")))
+        (should (= (length fetched) 1))
+        (funcall (cdar fetched) canvas-browser-test--ico)
+        (with-current-buffer (nth 2 pages)
+          (canvas-browser--take-icon-url "https://e.org/icon.ico"))
+        (should (= (length fetched) 1))
+        (dolist (page pages)
+          (should (eq (car (buffer-local-value 'canvas-browser--icon page)) 'image)))))))
+
+(ert-deftest canvas-browser-an-icon-that-cannot-be-had-is-not-asked-again ()
+  ;; GIVEN a page whose icon could not be fetched
+  ;; WHEN another page names it
+  ;; THEN it is not fetched again, and neither page has an icon
+  (canvas-browser-test--with-pages '("*a*" "*b*")
+    (let ((fetched 0))
+      (cl-letf (((symbol-function 'canvas-browser--fetch-icon)
+                 (lambda (_url then) (cl-incf fetched) (funcall then nil))))
+        (dolist (page pages)
+          (with-current-buffer page
+            (canvas-browser--take-icon-url "https://e.org/favicon.ico")
+            (should-not canvas-browser--icon))))
+      (should (= fetched 1)))))
+
+(ert-deftest canvas-browser-only-an-address-of-the-web-or-of-data-is-an-icon ()
+  ;; GIVEN a page that answers with no address, or with something else
+  ;; WHEN it is taken for the address of its icon
+  ;; THEN nothing is fetched
+  (canvas-browser-test--with-pages '("*a*")
+    (cl-letf (((symbol-function 'canvas-browser--fetch-icon)
+               (lambda (&rest _) (error "Fetched"))))
+      (with-current-buffer (car pages)
+        (dolist (answer '(nil "" "The title of the page" "file:///tmp/i.png"))
+          (canvas-browser--take-icon-url answer))
+        (should-not canvas-browser--icon-url)))))
+
+(ert-deftest canvas-browser-an-icon-in-a-data-url-is-read-from-it ()
+  ;; GIVEN the icon of a page written in a data URL, in base64 and not
+  ;; WHEN it is fetched
+  ;; THEN its bytes are those of the URL; an empty one has none
+  (let (got)
+    (canvas-browser--fetch-icon
+     (concat "data:image/x-icon;base64," (base64-encode-string canvas-browser-test--ico))
+     (lambda (bytes) (setq got bytes)))
+    (should (equal got canvas-browser-test--ico))
+    (canvas-browser--fetch-icon "data:image/svg+xml,%3Csvg%3E%3C/svg%3E"
+                                (lambda (bytes) (setq got bytes)))
+    (should (equal got "<svg></svg>"))
+    (canvas-browser--fetch-icon "data:," (lambda (bytes) (setq got bytes)))
+    (should (equal got ""))
+    (should-not (canvas-browser--icon-image got))))
+
+(defun canvas-browser-test--chromium-answers (answers)
+  "A stub of `canvas-browser-cdp-send' that answers each method from ANSWERS.
+ANSWERS is an alist of METHOD and a list of results, given in turn."
+  (lambda (method params &optional answer _session)
+    (push (cons method params) canvas-browser-test--commands)
+    (let ((results (assoc method answers)))
+      (when answer
+        (funcall answer (pop (cdr results)))))))
+
+(ert-deftest canvas-browser-chromium-fetches-an-icon-in-pieces ()
+  ;; GIVEN a page, whose chromium has its icon and gives it in two reads
+  ;; WHEN the icon is fetched
+  ;; THEN its bytes are the two pieces, AND the stream is closed
+  (canvas-browser-test--in-page
+    (let ((got nil))
+      (cl-letf (((symbol-function 'canvas-browser-cdp-send)
+                 (canvas-browser-test--chromium-answers
+                  `(("Network.loadNetworkResource"
+                     (:resource (:success t :httpStatusCode 200 :stream "7")))
+                    ("IO.read"
+                     (:data ,(base64-encode-string "<svg>") :base64Encoded t :eof :false)
+                     (:data "</svg>" :base64Encoded :false :eof t))))))
+        (canvas-browser--fetch-icon "https://example.org/i.svg"
+                                    (lambda (bytes) (setq got bytes))))
+      (should (equal got "<svg></svg>"))
+      (should (equal (plist-get (canvas-browser-test--params "Network.loadNetworkResource")
+                                :frameId)
+                     canvas-browser--target))
+      (should (equal (canvas-browser-test--params "IO.close") '(:handle "7"))))))
+
+(ert-deftest canvas-browser-an-icon-chromium-may-not-fetch-is-fetched-by-emacs ()
+  ;; GIVEN a page whose rules forbid chromium to fetch its icon
+  ;; WHEN the icon is fetched
+  ;; THEN Emacs fetches it itself; a server that has none is not asked again
+  (canvas-browser-test--in-page
+    (let ((direct nil) (got 'unset))
+      (cl-letf (((symbol-function 'canvas-browser-cdp-send)
+                 (canvas-browser-test--chromium-answers
+                  '(("Network.loadNetworkResource"
+                     nil
+                     (:resource (:success t :httpStatusCode 404))))))
+                ((symbol-function 'canvas-browser--fetch-icon-directly)
+                 (lambda (url then) (push url direct) (funcall then "bytes"))))
+        (canvas-browser--fetch-icon "https://elsewhere.org/i.png"
+                                    (lambda (bytes) (setq got bytes)))
+        (should (equal direct '("https://elsewhere.org/i.png")))
+        (should (equal got "bytes"))
+        (canvas-browser--fetch-icon "https://example.org/favicon.ico"
+                                    (lambda (bytes) (setq got bytes)))
+        (should (equal direct '("https://elsewhere.org/i.png")))
+        (should-not got)))))
+
+(ert-deftest canvas-browser-a-page-asks-for-its-icon-when-it-has-loaded ()
+  ;; GIVEN a page
+  ;; WHEN it has loaded
+  ;; THEN it asks for the address of its icon, as it asks for its title
+  (canvas-browser-test--in-page
+    (let ((scripts nil))
+      (cl-letf (((symbol-function 'canvas-browser--evaluate)
+                 (lambda (script _answer) (push script scripts))))
+        (canvas-browser--loaded nil))
+      (should (member canvas-browser--icon-script scripts)))))
+
+(ert-deftest canvas-browser-a-page-of-a-known-site-shows-its-icon-at-once ()
+  ;; GIVEN a site whose icon is known, and a page of another site
+  ;; WHEN the page goes to the known site
+  ;; THEN its tab shows that site's icon before the page has loaded
+  (canvas-browser-test--in-page
+    (let* ((canvas-browser--icons (make-hash-table :test #'equal))
+           (canvas-browser--site-icons (make-hash-table :test #'equal))
+           (icon (canvas-browser--icon-spec canvas-browser--blank-icon-svg 'svg)))
+      (puthash "https://github.com:443" "https://github.com/i.svg" canvas-browser--site-icons)
+      (puthash "https://github.com/i.svg" icon canvas-browser--icons)
+      (canvas-browser--target-changed
+       (list :targetInfo (list :targetId canvas-browser--target :type "page"
+                               :url "https://github.com/x" :title "x")))
+      (should (eq canvas-browser--icon icon)))))
+
+(ert-deftest canvas-browser-a-page-is-fitted-to-its-window-once-attached ()
+  ;; GIVEN a page buffer shown in a window whose line of tabs was not
+  ;;      drawn when it was measured, so that the canvas is too high
+  ;; WHEN the page is attached
+  ;; THEN the canvas is the size of the window's body
+  (canvas-browser-test--with-chromium
+    (with-temp-buffer
+      (canvas-browser-mode)
+      (switch-to-buffer (current-buffer))
+      (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 800))
+                ((symbol-function 'window-body-height) (lambda (&rest _) 578)))
+        (canvas-browser--open "https://example.org" 800 600)
+        (should (equal canvas-browser--size '(800 . 578)))
+        (should (equal (plist-get (canvas-browser-test--params "Emulation.setDeviceMetricsOverride")
+                                  :height)
+                       578))))))

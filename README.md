@@ -183,6 +183,7 @@ Normal state keeps the keys of Emacs:
 | `B`, `J` | keep this page as a bookmark, and open a page you kept |
 | `y` | copies the address of this page, as `f y` copies the address of a link |
 | `O` | the same in a page buffer of its own, as the `O` of Vimium and qutebrowser opens a tab |
+| `C-<next>`, `C-<prior>` | go to the next and the previous tab, in insert state as well |
 | `g` | reads the page again |
 | `M-p`, `M-n` | go back and forward in the history |
 | `n`, `p` | scroll a line further down and back |
@@ -204,6 +205,7 @@ Normal state keeps the keys of Emacs:
 | a click | clicks the page at that pixel, and types there if it is a field |
 | a drag | marks what lies between its two ends, once the button is let go |
 | the wheel | scrolls what lies under the pointer, over a link as well |
+| a click on a tab, its `×`, the `+` | shows that page, kills it, and opens a new page in this window |
 
 The scroll keys move the page itself, which happens at once. The wheel
 goes to the page as a wheel, at the pixel the pointer is over, so that it
@@ -425,8 +427,8 @@ frame.
 
 A page buffer is named after the address it shows, and takes the new
 one whenever the page moves, by a link, by `o` or by the page itself, so
-that `C-x b` says what each buffer holds. The header line shows the
-title the page gives itself once it has loaded: until then chromium
+that `C-x b` says what each buffer holds. The header line and the tab
+show the title the page gives itself once it has loaded: until then chromium
 names a page after its file. A page embedded in another buffer keeps the
 name its host gave it, since the host finds it by that name.
 
@@ -439,6 +441,43 @@ opens a tab. When such a window closes itself, as the one to sign in
 does once you have, its buffer goes with it. Chromium tells of every
 page that opens and closes; only a page that one of these buffers
 opened is taken, and a frame or a worker is left alone.
+
+## Tabs
+
+Each page is a buffer of its own, and so is each window a page opens.
+A page buffer shows a line of tabs above its header line, one for each
+page, as Chrome does: tab-line, which comes with Emacs, draws it in the
+buffers of pages alone, so other buffers and the tabs of `tab-bar-mode`
+are left as they are. The tabs keep the order the pages were opened in.
+A tab shows the icon and the title of its page, cut to
+`canvas-browser-tab-width` characters, and its address until the page
+has given a title.
+
+A click on a tab shows its page in that window. Its `×` kills the page,
+and a window that showed it shows the tab to its right, or to its left
+for the last tab. The `+` asks for a URL and opens it in this window.
+`C-<next>` and `C-<prior>` go to the next and the previous tab, as
+Control with Page Down and Page Up do in a browser; `C-TAB` stays with
+`tab-bar-mode`. An embedded page has no tab: it belongs to the buffer it
+is in.
+
+The icon is the one the page names in its head, or the one at
+`/favicon.ico` of its site. Chromium fetches it, from its cache where it
+can; where a page's rules forbid that, Emacs fetches it, without
+waiting. An ICO, which Emacs cannot read, is turned into a PNG by
+canvas-cairo, which reads it with gdk-pixbuf. Each icon is fetched once
+and kept while Emacs runs, so a page of a site you opened before shows
+the icon at once. A page with no icon, or whose icon has not come yet,
+shows a globe.
+
+The faces `canvas-browser-tab-line`, `canvas-browser-tab` and
+`canvas-browser-tab-current` are laid over tab-line's own in a page
+buffer, in the grey and white of Chrome, so the tabs of pages do not
+look like the tabs of `tab-bar-mode`; customize them to change that.
+Set `canvas-browser-tabs` to nil to have no line of tabs in the pages
+opened after; the keys still go from page to page. The line is on by
+default because it shows only in the buffers of pages. The line takes a
+line of the window, and the page is laid out for what is left.
 
 ## The map of canvas-minimap
 
@@ -608,6 +647,9 @@ Chrome for Testing here keeps it apart from the Chrome you browse with.
 | `canvas-browser-line-height` | 40 | pixels that `n` and `p` scroll |
 | `canvas-browser-search-url` | DuckDuckGo | where words are searched for |
 | `canvas-browser-spots-delay` | 0.3 | seconds of quiet before the pointer areas are read |
+| `canvas-browser-tabs` | t | whether a page buffer shows a line of tabs |
+| `canvas-browser-tab-icons` | t | whether a tab shows the icon of its page |
+| `canvas-browser-tab-width` | 24 | the most characters of a title a tab shows |
 
 A page that stops answering for a few seconds says so in the echo area,
 and `g` reads it again.
@@ -626,7 +668,7 @@ machine.
 
 - Video and animation: a frame reaches the screen after what you do, and
   a full frame costs about 3.5 MB on a display without shared memory.
-- Tabs of its own, downloads, printing and developer tools.
+- Downloads, printing and developer tools.
 - A second engine.
 
 ## The tests

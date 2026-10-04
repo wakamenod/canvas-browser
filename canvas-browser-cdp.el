@@ -184,6 +184,22 @@ ANSWER, a function of one plist, has the result when it arrives."
     (websocket-send-text canvas-browser-cdp--socket (json-encode command))
     id))
 
+(defvar canvas-browser-cdp--quiet (make-hash-table :test #'eql)
+  "The ids of the commands whose refusal is no news to the reader.")
+
+(defun canvas-browser-cdp-send-quietly (method params &optional answer session)
+  "Send METHOD as `canvas-browser-cdp-send' does, but keep a refusal quiet.
+Some commands are refused often and for nothing the reader can mend, as
+a page whose rules forbid fetching its icon refuses it; ANSWER still has
+nil then.  The id is put aside before the command goes, since its answer
+may come while it is being sent."
+  (let ((id (1+ canvas-browser-cdp--id)))
+    (puthash id t canvas-browser-cdp--quiet)
+    (condition-case failure
+        (canvas-browser-cdp-send method params answer session)
+      (error (remhash id canvas-browser-cdp--quiet)
+             (signal (car failure) (cdr failure))))))
+
 (defun canvas-browser-cdp-listen (session method function)
   "Have FUNCTION called with the parameters of METHOD in SESSION."
   (puthash (cons session method) function canvas-browser-cdp--listeners))
@@ -206,9 +222,11 @@ ANSWER, a function of one plist, has the result when it arrives."
 (defun canvas-browser-cdp--answer (id message)
   "Give MESSAGE, the answer of the command ID, to the function that waits."
   (let ((answer (gethash id canvas-browser-cdp--waiting))
-        (failure (plist-get message :error)))
+        (failure (plist-get message :error))
+        (quiet (gethash id canvas-browser-cdp--quiet)))
     (remhash id canvas-browser-cdp--waiting)
-    (when failure
+    (remhash id canvas-browser-cdp--quiet)
+    (when (and failure (not quiet))
       (message "canvas-browser: chromium says: %s" (plist-get failure :message)))
     (when answer
       ;; A refused command answers with nothing, so that a caller which

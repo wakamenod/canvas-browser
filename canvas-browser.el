@@ -20,6 +20,7 @@
 (require 'canvas-keys)
 (require 'transient)
 (require 'url-util)
+(require 'tab-line)
 (require 'canvas-browser-cdp)
 
 (defcustom canvas-browser-quality 70
@@ -125,6 +126,12 @@ which the next window change makes right."
 
 (defvar-local canvas-browser--number nil
   "What tells this page's files from the files of every other page.")
+
+(defvar canvas-browser--opened-pages 0
+  "How many page buffers have been made, so that each knows its place.")
+
+(defvar-local canvas-browser--opened nil
+  "The place of this page among the tabs: the number it was made with.")
 
 (defvar canvas-browser--pages 0
   "How many pages have been opened, so that each one names its files.")
@@ -717,7 +724,7 @@ after a restore of the page itself.  A navigation to a new page keeps it."
     (canvas-browser--apply-dark)))
 
 (defun canvas-browser--loaded (_params)
-  "Ask the page that has loaded for its title, for the header line.
+  "Ask the page that has loaded for its title and its icon, for the tabs.
 Chromium names a page after its file until the page changes address
 again, whatever the page calls itself."
   (let ((buffer (current-buffer)))
@@ -727,7 +734,8 @@ again, whatever the page calls itself."
        (when (and (buffer-live-p buffer) (stringp title) (not (string-empty-p title)))
          (with-current-buffer buffer
            (setq canvas-browser--title title)
-           (force-mode-line-update)))))))
+           (canvas-browser--tabs-changed))))))
+  (canvas-browser--find-icon))
 
 (defun canvas-browser--detached (params)
   "Take PARAMS of the event that says chromium has let this page go.
@@ -766,12 +774,28 @@ does: it was opened at its address."
            ;; page you browse.
            (canvas-browser--awaken (not canvas-browser--host))
            (canvas-browser--apply-dark)
+           (canvas-browser--fit-shown-window)
            (canvas-browser--resize (car canvas-browser--size) (cdr canvas-browser--size))
            (when canvas-browser--host
              (canvas-browser--watch-fullscreen))
            (when url
              (canvas-browser--tell "Page.navigate" (list :url url)))
            (canvas-browser--start-screencast)))))))
+
+(defun canvas-browser--fit-shown-window ()
+  "Make the canvas the size of the window that shows this page, if one does.
+A window is measured before Emacs has drawn it, and Emacs guesses the
+height of a line of tabs it has not drawn yet from its font alone, not
+from the icons and the box it is drawn with.  The window has its true
+size once it is drawn, but a change of size heard before the page was
+attached was no news to it.  An embedded page keeps the size it was given."
+  (when-let* (((not canvas-browser--host))
+              (window (get-buffer-window (current-buffer) t))
+              ((window-live-p window)))
+    (let ((width (max (window-body-width window t) canvas-browser--least-size))
+          (height (max (window-body-height window t) canvas-browser--least-size)))
+      (unless (equal canvas-browser--size (cons width height))
+        (canvas-browser--adopt width height)))))
 
 (defun canvas-browser--buffer-of-target (target)
   "The page buffer that shows TARGET, or nil."
@@ -806,6 +830,11 @@ it, since the host finds it by that name."
         ;; its title stands only for a new address, until the page has
         ;; loaded and given its own.
         (unless (equal url canvas-browser--url)
+          ;; A page of another site has another icon, which is known
+          ;; if the site was opened before.
+          (unless (equal (canvas-browser--origin url)
+                         (canvas-browser--origin canvas-browser--url))
+            (canvas-browser--icon-of-site url))
           (setq canvas-browser--url url
                 canvas-browser--title (and (stringp title) (not (string-empty-p title)) title)))
         (unless canvas-browser--host
@@ -813,7 +842,7 @@ it, since the host finds it by that name."
             ;; A name made unique with <2> is the name already.
             (unless (string-prefix-p name (buffer-name))
               (rename-buffer name t))))
-        (force-mode-line-update)))))
+        (canvas-browser--tabs-changed)))))
 
 (defun canvas-browser--target-created (params)
   "Show the page of PARAMS in a buffer of its own, if one of ours opened it.
@@ -900,7 +929,9 @@ A choice of files that this page waited for is forgotten with it."
     (cancel-timer canvas-browser--crisp-timer)
     (setq canvas-browser--crisp-timer nil))
   (canvas-browser--forget-live)
-  (canvas-browser--forget-files))
+  (canvas-browser--forget-files)
+  ;; Every window with tabs loses this page's tab.
+  (canvas-browser--tabs-changed))
 
 (defun canvas-browser--forget-files ()
   "Delete the pictures this page wrote, now that nobody reads them."
@@ -2599,7 +2630,10 @@ keys zoom the page.  `g\=' is `revert-buffer\=', which reads it again.")
   "<next>" #'canvas-browser-scroll-up
   "<prior>" #'canvas-browser-scroll-down
   "<home>" #'canvas-browser-beginning-of-page
-  "<end>" #'canvas-browser-end-of-page)
+  "<end>" #'canvas-browser-end-of-page
+  ;; The tab keys of a browser; `C-TAB' stays with `tab-bar-mode'.
+  "C-<next>" #'tab-line-switch-to-next-tab
+  "C-<prior>" #'tab-line-switch-to-prev-tab)
 
 ;;;; The caret of the page
 
@@ -3181,7 +3215,9 @@ here, on every load."
   (define-key map (kbd "C-@") #'canvas-browser-field-set-mark)
   (define-key map (kbd "C-x h") #'canvas-browser-field-mark-whole)
   (define-key map (kbd "M-w") #'canvas-browser-field-copy)
-  (define-key map (kbd "C-w") #'canvas-browser-field-cut))
+  (define-key map (kbd "C-w") #'canvas-browser-field-cut)
+  (define-key map (kbd "C-<next>") #'tab-line-switch-to-next-tab)
+  (define-key map (kbd "C-<prior>") #'tab-line-switch-to-prev-tab))
 
 (canvas-browser--bind-insert-keys canvas-browser-insert-map)
 
@@ -3358,13 +3394,15 @@ nothing the window does not.  Take the mode out of
 (define-derived-mode canvas-browser-mode special-mode "Browser"
   "Major mode of a buffer that shows a web page on a canvas."
   (setq cursor-type nil
-        truncate-lines t)
+        truncate-lines t
+        canvas-browser--opened (cl-incf canvas-browser--opened-pages))
   ;; The canvas is as wide as the window, so point at the end of the line
   ;; sits just past its right edge.  In a window without fringes there is
   ;; nowhere to show the cursor there, and Emacs would scroll the page
   ;; sideways to bring it into view.
   (setq-local auto-hscroll-mode nil)
   (setq header-line-format '(:eval (canvas-browser--header)))
+  (canvas-browser--show-tabs)
   ;; `revert-buffer-function' is not buffer-local by itself: a plain setq
   ;; would make every other buffer read a page again.
   (setq-local revert-buffer-function #'canvas-browser-refresh)
@@ -3405,6 +3443,403 @@ nothing the window does not.  Take the mode out of
                               (window-body-width window t)
                               (window-body-height window t))))
     buffer))
+
+;;;; The tabs of the pages
+
+(defcustom canvas-browser-tabs t
+  "Whether a page buffer shows a line of tabs, one for each page.
+Each page is a buffer of its own, and a window a page opens is another,
+so the tabs of a browser are there already; the line shows them and
+switches between them.  It is on by default because it is shown only in
+the buffers of pages, and leaves every other buffer, and `tab-bar-mode\=',
+alone.  It takes effect in the pages opened after it is changed."
+  :type 'boolean
+  :group 'canvas-browser)
+
+(defcustom canvas-browser-tab-icons t
+  "Whether a tab shows the icon of its page.
+The icon is fetched once for each address it has, and kept while Emacs
+runs."
+  :type 'boolean
+  :group 'canvas-browser)
+
+(defcustom canvas-browser-tab-width 24
+  "The most characters of a page's title that its tab shows."
+  :type 'integer
+  :group 'canvas-browser)
+
+(defface canvas-browser-tab-line
+  '((((class color) (min-colors 88) (background light))
+     :background "#dee1e6" :foreground "#3c4043")
+    (((class color) (min-colors 88) (background dark))
+     :background "#202124" :foreground "#bdc1c6")
+    (t :inherit tab-line))
+  "The line of tabs of a page buffer, behind the tabs.
+It is laid over `tab-line\=' in a page buffer alone, so that the tabs of
+pages do not look like the tabs of `tab-bar-mode\='."
+  :group 'canvas-browser)
+
+(defface canvas-browser-tab
+  '((((class color) (min-colors 88) (background light))
+     :background "#dee1e6" :foreground "#5f6368"
+     :box (:line-width (1 . 4) :style flat-button))
+    (((class color) (min-colors 88) (background dark))
+     :background "#202124" :foreground "#9aa0a6"
+     :box (:line-width (1 . 4) :style flat-button))
+    (t :inherit tab-line-tab-inactive))
+  "The tab of a page that is not the one shown."
+  :group 'canvas-browser)
+
+(defface canvas-browser-tab-current
+  '((((class color) (min-colors 88) (background light))
+     :background "#ffffff" :foreground "#202124"
+     :box (:line-width (1 . 4) :style flat-button))
+    (((class color) (min-colors 88) (background dark))
+     :background "#3c4043" :foreground "#e8eaed"
+     :box (:line-width (1 . 4) :style flat-button))
+    (t :inherit tab-line-tab-current))
+  "The tab of the page a window shows."
+  :group 'canvas-browser)
+
+(defvar-local canvas-browser--icon nil
+  "The image of this page's icon, or nil while there is none.")
+
+(defvar-local canvas-browser--icon-url nil
+  "The address of the icon this page names, or nil.")
+
+(defvar canvas-browser--icons (make-hash-table :test #'equal)
+  "The icon of each icon address: an image, `none\=' for one that could
+not be had, or (loading BUFFER...) while it is fetched for the BUFFERs.")
+
+(defvar canvas-browser--site-icons (make-hash-table :test #'equal)
+  "The icon address each origin named last.
+A page of a site shows the icon of the site as soon as it is opened,
+rather than after it has loaded.")
+
+(defconst canvas-browser--icon-limit (* 512 1024)
+  "The most bytes an icon may have; anything larger is no icon.")
+
+(defconst canvas-browser--icon-pixels 32
+  "The pixels each side of an icon is drawn with when it is turned to PNG.
+A tab shows it at the height of a line, which is about this on a
+display of two pixels to the point.")
+
+(defconst canvas-browser--blank-icon-svg
+  "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='16' height='16'>
+<g fill='none' stroke='#8a8f98' stroke-width='1.2'>
+<circle cx='8' cy='8' r='6.4'/><ellipse cx='8' cy='8' rx='2.8' ry='6.4'/>
+<path d='M1.6 8h12.8M2.6 4.8h10.8M2.6 11.2h10.8'/></g></svg>"
+  "A globe, the icon of a page that has none of its own, or none yet.
+A grey stroke shows on a light line and on a dark one.")
+
+(defun canvas-browser--tab-p (buffer)
+  "Whether BUFFER is a page of its own, which has a tab.
+An embedded page has a name that begins with a space, and belongs to
+the buffer it is in rather than to the tabs."
+  (and (buffer-live-p buffer)
+       (eq (buffer-local-value 'major-mode buffer) 'canvas-browser-mode)
+       (not (string-prefix-p " " (buffer-name buffer)))
+       (not (buffer-local-value 'canvas-browser--host buffer))))
+
+(defun canvas-browser--tab-buffers ()
+  "The page buffers, in the order they were opened, as a browser keeps them.
+The order of `buffer-list\=' changes whenever a buffer is shown, and tabs
+that jumped about under the pointer could not be clicked."
+  (sort (seq-filter #'canvas-browser--tab-p (buffer-list))
+        (lambda (a b)
+          (< (or (buffer-local-value 'canvas-browser--opened a) 0)
+             (or (buffer-local-value 'canvas-browser--opened b) 0)))))
+
+(defvar canvas-browser--blank-icon nil
+  "The image of `canvas-browser--blank-icon-svg\=', once it is made.")
+
+(defun canvas-browser--tab-icon ()
+  "The icon of this page as text for its tab, or the globe while it has none."
+  (let ((image (or canvas-browser--icon
+                   (and (image-type-available-p 'svg)
+                        (with-memoization canvas-browser--blank-icon
+                          (canvas-browser--icon-spec canvas-browser--blank-icon-svg 'svg))))))
+    (if image (propertize " " 'display image) "")))
+
+(defun canvas-browser--tab-name (buffer &optional _buffers)
+  "The name of BUFFER's tab: the icon and the title of its page.
+A page that has not said its title yet is named by its address."
+  (with-current-buffer buffer
+    (let ((title (string-trim
+                  (replace-regexp-in-string
+                   "[\n\t]+" " " (or canvas-browser--title canvas-browser--url (buffer-name))))))
+      (concat " "
+              (when canvas-browser-tab-icons
+                (concat (canvas-browser--tab-icon) " "))
+              (truncate-string-to-width title canvas-browser-tab-width nil nil t)
+              " "))))
+
+(defun canvas-browser--tab-cache-key (tabs)
+  "What tab-line keeps the line of TABS for, with what names each tab.
+Tab-line draws the line again when the buffers change, but the title of
+a page and its icon change in a buffer that stays.  The default keys
+come first, since tab-line reads two of them by their place."
+  (append (tab-line-cache-key-default tabs)
+          (list (mapcar (lambda (buffer)
+                          (with-current-buffer buffer
+                            (list canvas-browser--title canvas-browser--url
+                                  canvas-browser--icon-url (and canvas-browser--icon t))))
+                        tabs))))
+
+(defun canvas-browser--tabs-changed ()
+  "Draw the tabs of every window again: a tab changed its name or its icon.
+A window that shows another page shows this page's tab as well."
+  (force-mode-line-update t))
+
+(defun canvas-browser--close-tab (buffer)
+  "Close the tab of BUFFER: kill the page.
+A window that showed it shows the tab to its right, or to its left when
+it was the last, as a browser does, rather than whatever buffer Emacs
+would pick."
+  (let* ((tabs (canvas-browser--tab-buffers))
+         (next (or (cadr (memq buffer tabs))
+                   (cadr (memq buffer (reverse tabs))))))
+    (when next
+      (dolist (window (get-buffer-window-list buffer nil t))
+        (set-window-buffer window next)))
+    (kill-buffer buffer)))
+
+(defun canvas-browser-new-tab ()
+  "Open a page in a new tab, in this window, as `+' of the tabs does."
+  (interactive)
+  (let ((display-buffer-overriding-action '(display-buffer-same-window)))
+    (call-interactively #'canvas-browser)))
+
+(defun canvas-browser--show-tabs ()
+  "Give this page buffer its line of tabs.
+The tabs are set up in every page, so that the keys that switch them
+work even with the line turned off; the line itself is shown where
+`canvas-browser-tabs\=' says so.  The faces are laid over tab-line's in
+this buffer alone."
+  (setq-local tab-line-tabs-function #'canvas-browser--tab-buffers
+              tab-line-tab-name-function #'canvas-browser--tab-name
+              tab-line-close-tab-function #'canvas-browser--close-tab
+              tab-line-new-tab-choice #'canvas-browser-new-tab
+              ;; Every page is a buffer of no file, which tab-line
+              ;; would set in italics.
+              tab-line-tab-face-functions nil
+              tab-line-cache-key-function #'canvas-browser--tab-cache-key)
+  (when (and canvas-browser-tabs (not (string-prefix-p " " (buffer-name))))
+    (dolist (face '(tab-line tab-line-active tab-line-inactive))
+      (face-remap-add-relative face 'canvas-browser-tab-line))
+    (face-remap-add-relative 'tab-line-tab-inactive 'canvas-browser-tab)
+    (dolist (face '(tab-line-tab tab-line-tab-current))
+      (face-remap-add-relative face 'canvas-browser-tab-current))
+    (tab-line-mode 1)))
+
+;; Tab-line shows its `+' only for the functions it knows.
+(add-to-list 'tab-line-new-button-functions #'canvas-browser--tab-buffers)
+
+;;;; The icons of the pages
+
+(defconst canvas-browser--icon-script
+  "(() => {
+  if (!/^https?:$/.test(location.protocol)) return null;
+  const score = l => {
+    const type = (l.type || '').toLowerCase(), sizes = l.sizes ? l.sizes.value : '';
+    if (/(^|\\s)(16x16|32x32)(\\s|$)/.test(sizes)) return 3;
+    if (type.includes('svg') || /\\.svg([?#]|$)/i.test(l.href)) return 2;
+    return 1; };
+  let best = null, top = 0;
+  for (const l of document.querySelectorAll('link[rel~=\"icon\" i][href]')) {
+    if (l.media && !matchMedia(l.media).matches) continue;
+    const s = score(l);
+    if (s > top) { best = l; top = s; } }
+  return best ? best.href : new URL('/favicon.ico', location.origin).href; })()"
+  "The JavaScript that answers with the address of the page's icon.
+An icon of a tab's size comes first, then a drawing, which fits any
+size, then the first the page names; a page that names none has the
+icon of its site at /favicon.ico, where browsers look for it.  A page of
+no site, such as a file, has none.")
+
+(defun canvas-browser--origin (url)
+  "The scheme, host and port of URL, or nil for an address of no site."
+  (when-let* ((parsed (and (stringp url) (url-generic-parse-url url)))
+              ((member (url-type parsed) '("http" "https")))
+              (host (url-host parsed)))
+    (format "%s://%s:%s" (url-type parsed) host (url-port parsed))))
+
+(defun canvas-browser--icon-of-site (url)
+  "Show the icon the site of URL named last, if it is known."
+  (let* ((icon-url (gethash (canvas-browser--origin url) canvas-browser--site-icons))
+         (icon (and icon-url (gethash icon-url canvas-browser--icons))))
+    (setq canvas-browser--icon-url icon-url
+          canvas-browser--icon (and (eq (car-safe icon) 'image) icon))))
+
+(defun canvas-browser--find-icon ()
+  "Ask the page for the address of its icon, and show that icon.
+It is asked when the page has loaded, as its title is: the page names
+its icon in its head, which may change as it runs."
+  (when canvas-browser-tab-icons
+    (canvas-browser--evaluate-here canvas-browser--icon-script
+                                   #'canvas-browser--take-icon-url)))
+
+(defun canvas-browser--take-icon-url (icon-url)
+  "Show the icon at ICON-URL in this page's tab, fetching it if need be.
+An icon is fetched once, for every page that names it.  An address of
+the web or of data names an icon; anything else is no icon to fetch."
+  (when (and (stringp icon-url)
+             (string-match-p "\\`\\(?:https?\\|data\\):" icon-url))
+    (when-let* ((origin (canvas-browser--origin canvas-browser--url)))
+      (puthash origin icon-url canvas-browser--site-icons))
+    (setq canvas-browser--icon-url icon-url)
+    (let ((known (gethash icon-url canvas-browser--icons)))
+      (pcase known
+        ('none (setq canvas-browser--icon nil))
+        (`(loading . ,_) (setcdr known (cons (current-buffer) (cdr known))))
+        (`(image . ,_) (setq canvas-browser--icon known))
+        (_ (puthash icon-url (list 'loading (current-buffer)) canvas-browser--icons)
+           (canvas-browser--fetch-icon
+            icon-url (lambda (bytes) (canvas-browser--icon-arrived icon-url bytes))))))
+    (canvas-browser--tabs-changed)))
+
+(defun canvas-browser--icon-arrived (icon-url bytes)
+  "Show the icon at ICON-URL, BYTES or nil, in the tabs that wait for it."
+  (let* ((image (and bytes (canvas-browser--icon-image bytes)))
+         (known (gethash icon-url canvas-browser--icons))
+         (waiting (and (eq (car-safe known) 'loading) (cdr known))))
+    (puthash icon-url (or image 'none) canvas-browser--icons)
+    (dolist (buffer waiting)
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (when (equal canvas-browser--icon-url icon-url)
+            (setq canvas-browser--icon image)))))
+    (canvas-browser--tabs-changed)))
+
+(defun canvas-browser--data-url-bytes (url)
+  "The bytes a data URL holds, or nil if URL is none."
+  (when (string-match "\\`data:\\([^,]*\\),\\(\\(?:.\\|\n\\)*\\)" url)
+    (let ((meta (match-string 1 url))
+          (data (match-string 2 url)))
+      (if (string-suffix-p ";base64" meta)
+          (ignore-errors (base64-decode-string (url-unhex-string data)))
+        (encode-coding-string (url-unhex-string data) 'utf-8)))))
+
+(defun canvas-browser--fetch-icon (icon-url then)
+  "Fetch ICON-URL, and call THEN with its bytes, or with nil.
+An icon written in its data URL is read from it.  Chromium fetches any
+other first, as the page would, from its cache and with the page's
+address; a page whose rules forbid that has it fetched by Emacs
+instead.  Neither waits: the page is drawn and typed in meanwhile."
+  (let ((session canvas-browser--session))
+    (cond
+     ((string-prefix-p "data:" icon-url)
+      (funcall then (canvas-browser--data-url-bytes icon-url)))
+     ((not (and session canvas-browser--target (canvas-browser-cdp-running-p)))
+      (canvas-browser--fetch-icon-directly icon-url then))
+     (t
+      (canvas-browser-cdp-send-quietly
+       "Network.loadNetworkResource"
+       ;; The target of a page is the id of its main frame as well.
+       (list :frameId canvas-browser--target :url icon-url
+             :options (list :disableCache :json-false :includeCredentials :json-false))
+       (lambda (result)
+         (let* ((resource (plist-get result :resource))
+                (stream (plist-get resource :stream)))
+           (cond
+            ((and stream (equal (plist-get resource :httpStatusCode) 200))
+             (canvas-browser--read-stream stream session then))
+            ;; The server answered, and has no icon there.
+            ((eq (plist-get resource :success) t)
+             (when stream
+               (canvas-browser-cdp-send-quietly "IO.close" (list :handle stream) nil session))
+             (funcall then nil))
+            (t (canvas-browser--fetch-icon-directly icon-url then)))))
+       session)))))
+
+(defun canvas-browser--read-stream (stream session then &optional chunks size)
+  "Read the rest of STREAM in SESSION, and call THEN with all its bytes.
+CHUNKS are the bytes read so far, newest first, SIZE bytes in all.  A
+stream larger than `canvas-browser--icon-limit\=' is no icon, and gives nil."
+  (canvas-browser-cdp-send-quietly
+   "IO.read" (list :handle stream :size 65536)
+   (lambda (result)
+     (let* ((data (plist-get result :data))
+            (bytes (and (stringp data)
+                        (if (eq (plist-get result :base64Encoded) t)
+                            (base64-decode-string data)
+                          (encode-coding-string data 'utf-8))))
+            (chunks (and bytes (cons bytes chunks)))
+            (size (+ (or size 0) (length bytes))))
+       (if (and bytes (not (eq (plist-get result :eof) t))
+                (<= size canvas-browser--icon-limit))
+           (canvas-browser--read-stream stream session then chunks size)
+         (canvas-browser-cdp-send-quietly "IO.close" (list :handle stream) nil session)
+         (funcall then (and bytes (<= size canvas-browser--icon-limit)
+                            (apply #'concat (nreverse chunks)))))))
+   session))
+
+(defvar url-http-end-of-headers)
+(defvar url-http-response-status)
+
+(defun canvas-browser--fetch-icon-directly (icon-url then)
+  "Fetch ICON-URL in Emacs, and call THEN with its bytes, or with nil.
+No cookie goes with it, and none is kept: an icon is the same for all."
+  (condition-case nil
+      (url-retrieve
+       icon-url
+       (lambda (status)
+         (let ((bytes (and (not (plist-get status :error))
+                           (boundp 'url-http-response-status)
+                           (eql url-http-response-status 200)
+                           (markerp url-http-end-of-headers)
+                           (< (- (point-max) url-http-end-of-headers) canvas-browser--icon-limit)
+                           (buffer-substring-no-properties
+                            (1+ url-http-end-of-headers) (point-max)))))
+           (kill-buffer)
+           (funcall then (and bytes (encode-coding-string bytes 'binary)))))
+       nil t t)
+    (error (funcall then nil))))
+
+(defun canvas-browser--icon-type (bytes)
+  "The type of the picture in BYTES, `ico\=' among them, or nil.
+Emacs knows the others by their first bytes, but not the icon format of
+Windows, which most sites still serve at /favicon.ico."
+  (if (string-prefix-p (unibyte-string 0 0 1 0) bytes)
+      'ico
+    (ignore-errors (image-type-from-data bytes))))
+
+(defun canvas-browser--icon-spec (bytes type)
+  "An image of BYTES, of TYPE, as high as the text of the tab around it."
+  (create-image bytes type t :height '(1 . em) :ascent 'center))
+
+(defun canvas-browser--icon-image (bytes)
+  "An image of the icon in BYTES, or nil if Emacs cannot show it.
+A picture Emacs cannot read itself, as an ICO, is drawn on a canvas by
+canvas-cairo, which reads it with gdk-pixbuf, and written as a PNG."
+  (when-let* ((type (canvas-browser--icon-type bytes)))
+    (if (and (not (eq type 'ico)) (image-type-available-p type))
+        (canvas-browser--icon-spec bytes type)
+      (when-let* ((png (ignore-errors (canvas-browser--picture-to-png bytes))))
+        (canvas-browser--icon-spec png 'png)))))
+
+(defun canvas-browser--picture-to-png (bytes)
+  "BYTES, a picture of any type gdk-pixbuf reads, as a square PNG.
+Its side is `canvas-browser--icon-pixels\='; an icon is square."
+  (let* ((side canvas-browser--icon-pixels)
+         (picture (make-temp-file "canvas-browser-icon-"))
+         (png (make-temp-file "canvas-browser-icon-" nil ".png"))
+         (context (canvas-cairo-context
+                   (list 'image :type 'canvas :id (make-symbol "canvas-browser-icon")
+                         :data-width side :data-height side))))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'binary))
+            (write-region bytes nil picture nil 'silent))
+          (canvas-cairo-image context picture 0 0 side side)
+          (canvas-cairo-write-png context png)
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally png)
+            (buffer-string)))
+      (canvas-cairo-destroy context)
+      (delete-file picture)
+      (delete-file png))))
 
 ;;;; As the browser of Emacs
 

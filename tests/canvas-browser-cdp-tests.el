@@ -129,6 +129,23 @@
       (should (string-search "Cannot navigate" said))
       (should-not answered))))
 
+(ert-deftest canvas-browser-cdp-a-quiet-command-is-refused-quietly ()
+  ;; GIVEN a command sent quietly, as the icon of a page is fetched
+  ;; WHEN chromium refuses it
+  ;; THEN nothing is said, AND the waiting function is called with nothing
+  (canvas-browser-test--with-stub
+    (let ((said nil) (answered 'nothing))
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format &rest args) (setq said (apply #'format format args)))))
+        (canvas-browser-cdp-send-quietly "Network.loadNetworkResource" '(:url "https://e.org/i.png")
+                                         (lambda (result) (setq answered result)))
+        (let ((id (plist-get (car canvas-browser-test--sent) :id)))
+          (canvas-browser-cdp--receive
+           (json-encode `(:id ,id :error (:code -32000 :message "CSP violation"))))
+          (should-not (gethash id canvas-browser-cdp--quiet))))
+      (should-not said)
+      (should-not answered))))
+
 (ert-deftest canvas-browser-cdp-events-reach-the-session-that-listens ()
   ;; GIVEN two sessions, each listening for a method
   ;; WHEN an event of one session arrives
