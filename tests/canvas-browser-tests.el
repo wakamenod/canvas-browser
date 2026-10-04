@@ -1438,6 +1438,25 @@ that moment now."
                              :enabled)
                   t)))))
 
+(ert-deftest canvas-browser-the-wheel-scrolls-the-page-under-the-pointer ()
+  ;; GIVEN a page in a window, AND another buffer that is current, as it
+  ;;       is while another window is selected
+  ;; WHEN the wheel turns over the page
+  ;; THEN the page under the pointer scrolls: Emacs runs the command in
+  ;;      the buffer of the selected window, which has no page
+  (canvas-browser-test--in-page
+    (let ((page (current-buffer))
+          (before (window-buffer (selected-window))))
+      (set-window-buffer (selected-window) page)
+      (unwind-protect
+          (with-temp-buffer
+            (setq canvas-browser-test--commands nil)
+            (canvas-browser-wheel (canvas-browser-test--wheel-event 'wheel-down 120 340))
+            (should (equal (plist-get (canvas-browser-test--params "Input.dispatchMouseEvent")
+                                      :x)
+                           120)))
+        (set-window-buffer (selected-window) before)))))
+
 (ert-deftest canvas-browser-the-windows-are-followed-only-while-chromium-runs ()
   ;; GIVEN page buffers and a chromium that has gone, as it does when the
   ;;       last page is killed

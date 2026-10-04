@@ -1348,20 +1348,45 @@ at all."
   (interactive)
   (canvas-browser--scroll-by (- canvas-browser-line-height)))
 
+(defun canvas-browser--event-page-window (event)
+  "The window EVENT, an event of the mouse, happened in, if it shows a page.
+Emacs looks the event up in the keys of that window, but runs the
+command in the window you are in, which may hold any other buffer.  An
+embedded page is clicked through its host, whose window shows no page,
+and is left to the command."
+  (let ((window (posn-window (event-start event))))
+    (and (window-live-p window)
+         (eq (buffer-local-value 'major-mode (window-buffer window)) 'canvas-browser-mode)
+         window)))
+
+(defun canvas-browser--event-buffer (event)
+  "The page buffer EVENT happened over, or else this buffer."
+  (let ((window (canvas-browser--event-page-window event)))
+    (if window (window-buffer window) (current-buffer))))
+
+(defun canvas-browser--select-event-window (event)
+  "Select the page window EVENT, a click or a drag on a page, happened in.
+A click on the page of another window goes there, as a click does in
+any window of Emacs, so that what you type next reaches that page."
+  (when-let* ((window (canvas-browser--event-page-window event)))
+    (select-window window)))
+
 (defun canvas-browser-wheel (event)
   "Scroll where EVENT, a turn of the wheel over the canvas, points.
 The turn goes to the page at that very pixel, so the part under the
 pointer scrolls, as it does in a window of chromium\='s own.  Emacs reports
-a fast turn as a double or a triple event, and each one scrolls a line."
+a fast turn as a double or a triple event, and each one scrolls a line.
+The page under the pointer scrolls, though another window is selected."
   (interactive "e")
   (let ((turn (event-basic-type event)))
     (cl-assert (memq turn '(wheel-up wheel-down)) nil
                "canvas-browser: %S is not a turn of the wheel" turn)
     (let ((at (posn-object-x-y (event-start event))))
-      (canvas-browser--wheel (car at) (cdr at)
-                             (if (eq turn 'wheel-up)
-                                 (- canvas-browser-line-height)
-                               canvas-browser-line-height)))))
+      (with-current-buffer (canvas-browser--event-buffer event)
+        (canvas-browser--wheel (car at) (cdr at)
+                               (if (eq turn 'wheel-up)
+                                   (- canvas-browser-line-height)
+                                 canvas-browser-line-height))))))
 
 (defconst canvas-browser--takes-typing-js
   "const takesTyping = e => !!e && (e.isContentEditable || e.tagName === 'TEXTAREA' ||
@@ -1550,6 +1575,7 @@ flown to from a place out of sight."
 (defun canvas-browser-click (event)
   "Click the page where EVENT, a click on the canvas, points."
   (interactive "e")
+  (canvas-browser--select-event-window event)
   (let ((at (posn-object-x-y (event-start event))))
     (canvas-browser--click (car at) (cdr at))))
 
@@ -1563,6 +1589,7 @@ Nil when the position is on something else in the window."
 The page marks the text between the two ends.  In a field, `M-w\=' then
 copies it."
   (interactive "e")
+  (canvas-browser--select-event-window event)
   (let ((from (canvas-browser--page-pixel (event-start event)))
         (to (canvas-browser--page-pixel (event-end event))))
     (unless (and from to)
