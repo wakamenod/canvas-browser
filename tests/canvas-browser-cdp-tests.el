@@ -27,11 +27,33 @@
   ;; WHEN the client starts
   ;; THEN it is a user error that names what to install
   (let ((canvas-browser-cdp--socket nil)
-        (canvas-browser-headless t))
+        (canvas-browser-headless t)
+        (system-type 'gnu/linux))
     (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
       (let ((error-text (error-message-string
                          (should-error (canvas-browser-cdp-start) :type 'user-error))))
         (should (string-search "snap install chromium" error-text))))))
+
+(ert-deftest canvas-browser-cdp-a-mac-without-chromium-is-told-to-install-chrome ()
+  ;; GIVEN a Mac with no chromium
+  ;; WHEN the client starts
+  ;; THEN the user error names the cask of Chrome, since there is no snap
+  (let ((canvas-browser-cdp--socket nil)
+        (canvas-browser-headless t)
+        (system-type 'darwin))
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
+      (should (string-search "brew install --cask google-chrome"
+                             (error-message-string
+                              (should-error (canvas-browser-cdp-start) :type 'user-error)))))))
+
+(ert-deftest canvas-browser-cdp-finds-chrome-inside-its-mac-bundle ()
+  ;; GIVEN a Mac whose only chromium is Google Chrome in /Applications
+  ;; WHEN the chromium to run is looked for
+  ;; THEN the executable inside the bundle is found by its full name
+  (let ((chrome "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (name) (and (equal name chrome) name))))
+      (should (equal (canvas-browser-cdp--executable) chrome)))))
 
 (ert-deftest canvas-browser-cdp-reads-the-address-from-the-port-file ()
   ;; GIVEN a profile directory holding a DevToolsActivePort file
@@ -203,6 +225,104 @@
       ;; Nothing is put in front of the environment it inherits: a
       ;; headless chromium is given no display of its own.
       (should (equal (canvas-browser-cdp--environment) process-environment)))))
+
+(ert-deftest canvas-browser-cdp-the-old-headless-setting-still-counts ()
+  ;; GIVEN `canvas-browser-headless' set, as before the window strategy
+  ;; WHEN the strategy is left at its default, and then chosen
+  ;; THEN the old setting makes it headless, AND a strategy chosen wins
+  (let ((canvas-browser-headless t)
+        (canvas-browser-window-strategy 'xvfb))
+    (should (eq (canvas-browser-cdp-window-strategy) 'headless))
+    (setq canvas-browser-window-strategy 'minimized)
+    (should (eq (canvas-browser-cdp-window-strategy) 'minimized)))
+  (let ((canvas-browser-headless nil)
+        (canvas-browser-window-strategy 'xvfb))
+    (should (eq (canvas-browser-cdp-window-strategy) 'xvfb))))
+
+(ert-deftest canvas-browser-cdp-a-minimized-chromium-needs-no-display ()
+  ;; GIVEN windows kept minimized on your own screen, as on macOS
+  ;; WHEN chromium is started
+  ;; THEN it has a window, unthrottled, AND no Xvfb is started, no
+  ;;      DISPLAY is given, and WebGL is left to the graphics card
+  (let ((started nil) (xvfb nil)
+        (canvas-browser-headless nil)
+        (canvas-browser-window-strategy 'minimized)
+        (canvas-browser-cdp--socket nil)
+        (canvas-browser-cdp--process nil))
+    (cl-letf (((symbol-function 'executable-find) (lambda (name) (concat "/usr/bin/" name)))
+              ((symbol-function 'canvas-browser-cdp--ensure-display) (lambda () (setq xvfb t)))
+              ((symbol-function 'make-process)
+               (lambda (&rest args) (setq started (plist-get args :command)) 'process))
+              ((symbol-function 'canvas-browser-cdp--address) (lambda () "ws://127.0.0.1:1/x"))
+              ((symbol-function 'websocket-open) (lambda (&rest _) 'socket))
+              ((symbol-function 'canvas-browser-cdp--socket-live-p) (lambda (_socket) t))
+              ((symbol-function 'canvas-browser-cdp--open-p) (lambda (_socket) t)))
+      (canvas-browser-cdp-start)
+      (should-not xvfb)
+      (should-not (member "--headless=new" started))
+      (should (member "--disable-backgrounding-occluded-windows" started))
+      (should (member "--disable-blink-features=AutomationControlled" started))
+      (should-not (member "--enable-unsafe-swiftshader" started))
+      (should (equal (canvas-browser-cdp--environment) process-environment)))))
+
+(ert-deftest canvas-browser-cdp-a-window-is-minimized-only-when-asked ()
+  ;; GIVEN a page T1, with windows kept minimized, and then on Xvfb
+  ;; WHEN its window is to be minimized
+  ;; THEN chromium is asked for the window of T1 and to minimize it,
+  ;;      AND on Xvfb, where nobody sees the window, nothing is sent
+  (canvas-browser-test--with-stub
+    (let ((canvas-browser-headless nil)
+          (canvas-browser-window-strategy 'minimized))
+      (canvas-browser-cdp-minimize-window "T1")
+      (let ((asked (car canvas-browser-test--sent)))
+        (should (equal (plist-get asked :method) "Browser.getWindowForTarget"))
+        (should (equal (plist-get (plist-get asked :params) :targetId) "T1"))
+        (canvas-browser-cdp--receive
+         (json-encode (list :id (plist-get asked :id) :result '(:windowId 7)))))
+      (let ((bounds (car canvas-browser-test--sent)))
+        (should (equal (plist-get bounds :method) "Browser.setWindowBounds"))
+        (should (equal (plist-get bounds :params)
+                       '(:windowId 7 :bounds (:windowState "minimized"))))))
+    (setq canvas-browser-test--sent nil)
+    (let ((canvas-browser-headless nil)
+          (canvas-browser-window-strategy 'xvfb))
+      (canvas-browser-cdp-minimize-window "T1")
+      (should-not canvas-browser-test--sent))))
+
+(ert-deftest canvas-browser-cdp-a-woken-window-is-restored-and-minimized-again ()
+  ;; GIVEN a page T1 whose window is kept minimized, and then one on Xvfb
+  ;; WHEN its window is woken, as after the page moved to a new document
+  ;; THEN the window is restored and minimized at once, AND minimized once
+  ;;      more a moment later, in case macOS restored it after all,
+  ;;      AND on Xvfb nothing is sent
+  (canvas-browser-test--with-stub
+    (let ((canvas-browser-headless nil)
+          (canvas-browser-window-strategy 'minimized)
+          (later nil))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function) (push function later))))
+        (canvas-browser-cdp-wake-window "T1")
+        (let ((asked (car canvas-browser-test--sent)))
+          (canvas-browser-cdp--receive
+           (json-encode (list :id (plist-get asked :id) :result '(:windowId 7)))))
+        (should (equal (mapcar (lambda (sent)
+                                 (plist-get (plist-get (plist-get sent :params) :bounds)
+                                            :windowState))
+                               (reverse (seq-filter
+                                         (lambda (sent) (equal (plist-get sent :method)
+                                                               "Browser.setWindowBounds"))
+                                         canvas-browser-test--sent)))
+                       '("normal" "minimized")))
+        (setq canvas-browser-test--sent nil)
+        (should (= (length later) 1))
+        (funcall (car later))
+        (should (equal (plist-get (car canvas-browser-test--sent) :method)
+                       "Browser.getWindowForTarget"))))
+    (setq canvas-browser-test--sent nil)
+    (let ((canvas-browser-headless nil)
+          (canvas-browser-window-strategy 'xvfb))
+      (canvas-browser-cdp-wake-window "T1")
+      (should-not canvas-browser-test--sent))))
 
 (ert-deftest canvas-browser-cdp-start-runs-chromium-headless-once ()
   ;; GIVEN a stubbed process and websocket

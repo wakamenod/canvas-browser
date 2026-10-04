@@ -2396,6 +2396,56 @@ selection at once."
     (should (equal (canvas-browser-test--params "Target.setDiscoverTargets")
                    '(:discover t)))))
 
+(ert-deftest canvas-browser-every-window-is-minimized-when-asked ()
+  ;; GIVEN a page buffer, with windows kept minimized on your own screen
+  ;; WHEN chromium tells of a page its page opened, of a page nobody
+  ;;      opened, such as its first tab, and of a worker
+  ;; THEN the window of each page is minimized, AND the worker, which
+  ;;      has no window, is left alone
+  (canvas-browser-test--in-page
+    (let ((minimized nil))
+      (cl-letf (((symbol-function 'canvas-browser-cdp-minimize-window)
+                 (lambda (target) (push target minimized))))
+        (unwind-protect
+            (progn
+              (canvas-browser-test--created "P1" "page" canvas-browser--target)
+              (canvas-browser-test--created "P2" "page" nil)
+              (canvas-browser-test--created "W1" "service_worker" nil)
+              (should (equal (reverse minimized) '("P1" "P2"))))
+          (when-let* ((opened (canvas-browser--buffer-of-target "P1")))
+            (kill-buffer opened)))))))
+
+(ert-deftest canvas-browser-a-page-that-moves-wakes-its-window ()
+  ;; GIVEN a page buffer
+  ;; WHEN the page moves to a new document, and then a frame inside it does
+  ;; THEN the window of the page is woken the first time, since a new
+  ;;      document in a minimized window draws nothing until it is,
+  ;;      AND not for the frame, whose page goes on drawing
+  (canvas-browser-test--in-page
+    (let ((woken nil))
+      (cl-letf (((symbol-function 'canvas-browser-cdp-wake-window)
+                 (lambda (target) (push target woken))))
+        (canvas-browser--frame-navigated (list :frame '(:id "F1") :type "Navigation"))
+        (should (equal woken (list canvas-browser--target)))
+        (canvas-browser--frame-navigated (list :frame '(:id "F2" :parentId "F1")
+                                               :type "Navigation"))
+        (should (= (length woken) 1))))))
+
+(ert-deftest canvas-browser-a-window-a-page-opens-is-woken-once-attached ()
+  ;; GIVEN a page buffer, whose target is T1
+  ;; WHEN T1 opens the page P1, which has loaded before anyone listened
+  ;; THEN the window of P1 is woken once a session is attached to it
+  (canvas-browser-test--in-page
+    (let ((woken nil))
+      (cl-letf (((symbol-function 'canvas-browser-cdp-wake-window)
+                 (lambda (target) (push target woken))))
+        (unwind-protect
+            (progn
+              (canvas-browser-test--created "P1" "page" canvas-browser--target)
+              (should (member "P1" woken)))
+          (when-let* ((opened (canvas-browser--buffer-of-target "P1")))
+            (kill-buffer opened)))))))
+
 (ert-deftest canvas-browser-a-window-a-page-opens-gets-a-buffer-of-its-own ()
   ;; GIVEN a page buffer, whose target is T1
   ;; WHEN chromium says that T1 opened the page P1

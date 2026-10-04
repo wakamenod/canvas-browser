@@ -46,9 +46,11 @@ part of it to copy a picture, and shows a page inside another buffer.
 - [canvas-keys](https://github.com/Daskeladden/canvas-keys), the keys
   that every canvas buffer shares.
 - The `websocket` package, and `transient` for the menu.
-- Chromium. On Ubuntu that is `sudo snap install chromium`.
+- Chromium. On Ubuntu that is `sudo snap install chromium`. On macOS,
+  Google Chrome or Chromium in `/Applications` is found as it is.
 - `Xvfb`, the X server that chromium draws on, out of sight. On Ubuntu
-  that is `sudo apt install xvfb`.
+  that is `sudo apt install xvfb`. macOS needs none: see
+  [On macOS](#on-macos).
 
 A snap writes only outside the hidden directories of your home, so the
 profile of a snap chromium goes to
@@ -505,17 +507,43 @@ percent, plus 87 MB for `Xvfb`. Software WebGL is for WebGL alone:
 drawing the whole window that way, which `--use-angle=swiftshader` does,
 cost two whole cores.
 
-Set `canvas-browser-headless` on a machine with no X server to give
-chromium a window on.
+`canvas-browser-window-strategy` says how chromium gets its window:
+`xvfb`, the default, is the display of its own above; `headless` is no
+window at all, for a machine with no X server; and `minimized` is for
+macOS, below. `canvas-browser-headless`, the older setting, still
+means `headless` while the strategy is left at `xvfb`.
+
+### On macOS
+
+Chromium on macOS draws on no X display, so `Xvfb` cannot hide it.
+Instead, its window opens on your own screen and is minimized at once:
+
+    (setq canvas-browser-window-strategy 'minimized)
+
+A minimized window still sends every frame and takes every key, and the
+sites see the same Chrome as with a window on `Xvfb`, with the WebGL of
+the graphics card. A window a page opens, such as one to sign in, is
+minimized as soon as chromium tells of it.
+
+A document that loads into a minimized window draws nothing until the
+window changes state, so each time a page moves to a new document its
+window is restored and minimized again at once.
+
+The minimized windows sit in the Dock, and Chrome is in the Dock and in
+`Cmd-Tab` while it runs. A tiling window manager such as Amethyst moves
+and restores windows on its own, and then pages stop drawing: leave this
+Chrome out of it. Using Chromium or Chrome for Testing here keeps it
+apart from the Chrome you browse with.
 
 ## Settings
 
 | setting | default | what it is |
 |---|---|---|
-| `canvas-browser-chromium` | chromium, chromium-browser, google-chrome | the names looked for |
+| `canvas-browser-chromium` | chromium, chromium-browser, google-chrome, and the apps of Chromium and Google Chrome on macOS | the names looked for |
 | `canvas-browser-profile-directory` | by the chromium found | where the profile goes |
 | `canvas-browser-cdp-timeout` | 10 | seconds to wait for chromium |
-| `canvas-browser-headless` | nil | whether chromium runs without a window of its own |
+| `canvas-browser-window-strategy` | xvfb | how chromium gets its window: xvfb, headless or minimized |
+| `canvas-browser-headless` | nil | the older way to say headless |
 | `canvas-browser-display` | :98 | the X display chromium draws its window on |
 | `canvas-browser-quality` | 70 | the quality of a moving frame, from 1 to 100 |
 | `canvas-browser-crisp-delay` | 0.4 | seconds of quiet before the page is drawn again without loss |

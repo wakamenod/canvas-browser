@@ -24,8 +24,14 @@
   :group 'applications
   :prefix "canvas-browser-")
 
-(defcustom canvas-browser-chromium '("chromium" "chromium-browser" "google-chrome")
-  "The names of the chromium to run, in the order they are looked for."
+(defcustom canvas-browser-chromium
+  '("chromium" "chromium-browser" "google-chrome"
+    "/Applications/Chromium.app/Contents/MacOS/Chromium"
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+  "The names of the chromium to run, in the order they are looked for.
+An absolute file name is taken as it is.  On macOS chromium lives inside
+its application bundle, which is on no path, so the bundles are named
+in full."
   :type '(repeat string)
   :group 'canvas-browser)
 
@@ -88,7 +94,9 @@ chromium loads every one when it starts.  Nil lets
 (defun canvas-browser-cdp--executable ()
   "The chromium to run, or a user error that says what to install."
   (or (cl-some #'executable-find canvas-browser-chromium)
-      (user-error "canvas-browser: no chromium; run `sudo snap install chromium'")))
+      (user-error (if (eq system-type 'darwin)
+                      "canvas-browser: no chromium; run `brew install --cask google-chrome'"
+                    "canvas-browser: no chromium; run `sudo snap install chromium'"))))
 
 (defun canvas-browser-cdp--profile ()
   "The profile directory in use."
@@ -235,9 +243,75 @@ A headless chromium says so in its user agent, keeps `navigator.webdriver\='
 true and has no WebGL at all, and a site behind a bot check reads all
 three: it then asks the reader to pick out traffic lights rather than to
 tick a box.  A chromium with a window reads as the browser it is.  Set
-this when there is no X server to give it one."
+this when there is no X server to give it one.
+This is the older name of `canvas-browser-window-strategy\=' set to
+`headless\=', and is heard only while that is left at `xvfb\='."
   :type 'boolean
   :group 'canvas-browser)
+
+(defcustom canvas-browser-window-strategy 'xvfb
+  "How chromium gets a window that nobody looks at.
+`xvfb\=': a window on an X display of its own, `canvas-browser-display\=',
+where `Xvfb\=' is started.  This needs an X server, so it is for Linux.
+`headless\=': no window at all.  Sites behind a bot check can tell; see
+`canvas-browser-headless\='.
+`minimized\=': a window on your own screen, minimized as soon as it opens,
+and so is every window a page opens later.  This is for macOS, where
+chromium draws on no X display and a minimized window still sends every
+frame and takes every key.
+While this is `xvfb\=', a non-nil `canvas-browser-headless\=' means `headless\='."
+  :type '(choice (const :tag "A window on an X display of its own" xvfb)
+                 (const :tag "No window" headless)
+                 (const :tag "A minimized window on your screen" minimized))
+  :group 'canvas-browser)
+
+(defun canvas-browser-cdp-window-strategy ()
+  "The way chromium gets its window, from the settings.
+`canvas-browser-headless\=' came first, so a setting of it still counts
+until the new setting is changed from its default."
+  (if (and (eq canvas-browser-window-strategy 'xvfb) canvas-browser-headless)
+      'headless
+    canvas-browser-window-strategy))
+
+(defconst canvas-browser-cdp--settle 0.5
+  "Seconds macOS takes to restore or minimize a window.")
+
+(defun canvas-browser-cdp--set-window-states (target states)
+  "Put the window of TARGET, a page, through STATES, one after another.
+Each state is a `windowState\=' of chromium, such as \"minimized\"."
+  (canvas-browser-cdp-send
+   "Browser.getWindowForTarget" (list :targetId target)
+   (lambda (result)
+     (when-let* ((window (plist-get result :windowId))
+                 ((canvas-browser-cdp-running-p)))
+       (dolist (state states)
+         (canvas-browser-cdp-send
+          "Browser.setWindowBounds"
+          (list :windowId window :bounds (list :windowState state))))))))
+
+(defun canvas-browser-cdp-minimize-window (target)
+  "Minimize the window of TARGET, a page, when windows are kept minimized.
+On your own screen every window chromium opens comes to the front: the
+first one, one for a page embedded elsewhere, and one a page opens to
+sign in.  The page is read through the screencast all the same, so the
+window is put away as soon as it is heard of."
+  (when (eq (canvas-browser-cdp-window-strategy) 'minimized)
+    (canvas-browser-cdp--set-window-states target '("minimized"))))
+
+(defun canvas-browser-cdp-wake-window (target)
+  "Have the minimized window of TARGET draw the document it now shows.
+A page that was drawing when its window was minimized goes on drawing,
+but a document loaded into a minimized window draws nothing, and sends
+no frame, until the window changes state.  So the window is restored
+and minimized again at once.  Two wakes close together, as when a page
+opens and then moves on, can leave macOS restoring the window after it
+was told to minimize it, so it is told once more a moment later."
+  (when (eq (canvas-browser-cdp-window-strategy) 'minimized)
+    (canvas-browser-cdp--set-window-states target '("normal" "minimized"))
+    (run-at-time canvas-browser-cdp--settle nil
+                 (lambda ()
+                   (when (canvas-browser-cdp-running-p)
+                     (canvas-browser-cdp-minimize-window target))))))
 
 (defcustom canvas-browser-display ":98"
   "The X display chromium draws its window on.
@@ -291,10 +365,12 @@ The display listens on its socket alone, never on the network."
     (canvas-browser-cdp--wait-for-display)))
 
 (defun canvas-browser-cdp--environment ()
-  "The environment chromium is started in."
-  (if canvas-browser-headless
-      process-environment
-    (cons (format "DISPLAY=%s" canvas-browser-display) process-environment)))
+  "The environment chromium is started in.
+Only a window on `Xvfb\=' is told where to draw; the others draw on no
+display or on your own screen."
+  (if (eq (canvas-browser-cdp-window-strategy) 'xvfb)
+      (cons (format "DISPLAY=%s" canvas-browser-display) process-environment)
+    process-environment))
 
 (defun canvas-browser-cdp--command-line ()
   "The command line of chromium, with a window of its own or without one."
@@ -303,25 +379,32 @@ The display listens on its socket alone, never on the network."
                 "--remote-allow-origins=*"
                 (format "--user-data-dir=%s" (canvas-browser-cdp--profile)))
           (canvas-browser-cdp--extension-flags)
-          (if canvas-browser-headless
+          (if (eq (canvas-browser-cdp-window-strategy) 'headless)
               (list "--headless=new")
             ;; A window nobody looks at is a window chromium would throttle
             ;; or stop drawing, and a page that stops drawing sends no frames.
-            (list "--no-first-run"
-                  "--no-default-browser-check"
-                  "--disable-background-timer-throttling"
-                  "--disable-backgrounding-occluded-windows"
-                  "--disable-renderer-backgrounding"
-                  ;; The reader drives this browser by hand, one key at a
-                  ;; time, and the flag that tells a page a robot does is
-                  ;; wrong about it.
-                  "--disable-blink-features=AutomationControlled"
-                  ;; An X server of its own has no graphics card, so
-                  ;; WebGL is drawn in software rather than not at all,
-                  ;; which is also what a page asks it about.  Only WebGL:
-                  ;; drawing the whole window that way costs two cores.
-                  "--enable-unsafe-swiftshader"
-                  (format "--window-size=%s" canvas-browser-cdp--window-size)))))
+            ;; On macOS a minimized window drew at full speed with and
+            ;; without these flags; they are kept since they cost nothing.
+            (append
+             (list "--no-first-run"
+                   "--no-default-browser-check"
+                   "--disable-background-timer-throttling"
+                   "--disable-backgrounding-occluded-windows"
+                   "--disable-renderer-backgrounding"
+                   ;; The reader drives this browser by hand, one key at a
+                   ;; time, and the flag that tells a page a robot does is
+                   ;; wrong about it.
+                   "--disable-blink-features=AutomationControlled"
+                   (format "--window-size=%s" canvas-browser-cdp--window-size))
+             ;; An X server of its own has no graphics card, so WebGL is
+             ;; drawn in software rather than not at all, which is also
+             ;; what a page asks it about.  Only WebGL: drawing the whole
+             ;; window that way costs two cores.  A minimized window on
+             ;; your own screen has the graphics card of the machine, and
+             ;; a WebGL that names it reads as any Chrome, where one that
+             ;; names SwiftShader would not.
+             (when (eq (canvas-browser-cdp-window-strategy) 'xvfb)
+               (list "--enable-unsafe-swiftshader"))))))
 
 (defun canvas-browser-cdp--open-p (socket)
   "Whether SOCKET has finished shaking hands."
@@ -353,7 +436,7 @@ A command sent while it connects reaches nobody."
     ;; The command line names the chromium, and a machine without one
     ;; says so before an X server is started for it.
     (let ((command (canvas-browser-cdp--command-line)))
-      (unless canvas-browser-headless
+      (when (eq (canvas-browser-cdp-window-strategy) 'xvfb)
         (canvas-browser-cdp--ensure-display))
       (let ((process-environment (canvas-browser-cdp--environment)))
         (make-directory (canvas-browser-cdp--profile) t)
