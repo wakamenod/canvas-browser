@@ -3269,6 +3269,11 @@ nothing the window does not.  Take the mode out of
   "Major mode of a buffer that shows a web page on a canvas."
   (setq cursor-type nil
         truncate-lines t)
+  ;; The canvas is as wide as the window, so point at the end of the line
+  ;; sits just past its right edge.  In a window without fringes there is
+  ;; nowhere to show the cursor there, and Emacs would scroll the page
+  ;; sideways to bring it into view.
+  (setq-local auto-hscroll-mode nil)
   (setq header-line-format '(:eval (canvas-browser--header)))
   ;; `revert-buffer-function' is not buffer-local by itself: a plain setq
   ;; would make every other buffer read a page again.

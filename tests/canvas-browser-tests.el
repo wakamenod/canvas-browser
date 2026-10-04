@@ -175,6 +175,17 @@ that moment now."
   (should (eq (plist-get (canvas-browser-test--menu-entry "y") :command)
               'canvas-browser-copy-url)))
 
+(ert-deftest canvas-browser-a-page-does-not-scroll-sideways-by-itself ()
+  ;; GIVEN a buffer
+  ;; WHEN it becomes a page buffer
+  ;; THEN it does not scroll sideways by itself: the canvas fills the
+  ;;      window, and point past it would shift the page out of a window
+  ;;      without fringes
+  (with-temp-buffer
+    (canvas-browser-mode)
+    (should-not auto-hscroll-mode)
+    (should (local-variable-p 'auto-hscroll-mode))))
+
 (ert-deftest canvas-browser-a-page-without-an-address-copies-none ()
   ;; GIVEN a page buffer with no address yet
   ;; WHEN y is pressed
