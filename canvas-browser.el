@@ -2633,7 +2633,8 @@ keys zoom the page.  `g\=' is `revert-buffer\=', which reads it again.")
   "<end>" #'canvas-browser-end-of-page
   ;; The tab keys of a browser; `C-TAB' stays with `tab-bar-mode'.
   "C-<next>" #'tab-line-switch-to-next-tab
-  "C-<prior>" #'tab-line-switch-to-prev-tab)
+  "C-<prior>" #'tab-line-switch-to-prev-tab
+  "C-c C-t" #'canvas-browser-switch-tab)
 
 ;;;; The caret of the page
 
@@ -3217,7 +3218,8 @@ here, on every load."
   (define-key map (kbd "M-w") #'canvas-browser-field-copy)
   (define-key map (kbd "C-w") #'canvas-browser-field-cut)
   (define-key map (kbd "C-<next>") #'tab-line-switch-to-next-tab)
-  (define-key map (kbd "C-<prior>") #'tab-line-switch-to-prev-tab))
+  (define-key map (kbd "C-<prior>") #'tab-line-switch-to-prev-tab)
+  (define-key map (kbd "C-c C-t") #'canvas-browser-switch-tab))
 
 (canvas-browser--bind-insert-keys canvas-browser-insert-map)
 
@@ -3609,6 +3611,54 @@ would pick."
   (interactive)
   (let ((display-buffer-overriding-action '(display-buffer-same-window)))
     (call-interactively #'canvas-browser)))
+
+(defun canvas-browser--tab-choices ()
+  "The tabs as choices to read, each its title and address, with its buffer.
+Two pages of one title and one address are told apart by a number, since
+a reader of choices keeps one of two that are the same."
+  (let ((seen (make-hash-table :test #'equal)))
+    (mapcar (lambda (buffer)
+              (with-current-buffer buffer
+                (let* ((title (string-trim
+                               (replace-regexp-in-string
+                                "[\n\t]+" " " (or canvas-browser--title canvas-browser--url
+                                                  (buffer-name)))))
+                       (choice (if canvas-browser--url
+                                   (format "%s  %s" title canvas-browser--url)
+                                 title))
+                       (count (cl-incf (gethash choice seen 0))))
+                  (cons (if (> count 1) (format "%s <%d>" choice count) choice)
+                        buffer))))
+            (canvas-browser--tab-buffers))))
+
+(defun canvas-browser-switch-tab ()
+  "Read a tab by its title or address, with its icon, and show its page.
+The tabs keep the order they were opened in, as the line of tabs does."
+  (interactive)
+  (let* ((choices (or (canvas-browser--tab-choices)
+                      (user-error "canvas-browser: no page is open")))
+         (current (current-buffer))
+         (affix (lambda (names)
+                  (mapcar (lambda (name)
+                            (let ((buffer (cdr (assoc name choices))))
+                              (list name
+                                    (concat (if (eq buffer current) "* " "  ")
+                                            (if (and canvas-browser-tab-icons
+                                                     (buffer-live-p buffer))
+                                                (with-current-buffer buffer
+                                                  (concat (canvas-browser--tab-icon) " "))
+                                              ""))
+                                    "")))
+                          names)))
+         (table (lambda (string predicate action)
+                  (if (eq action 'metadata)
+                      `(metadata (category . canvas-browser-tab)
+                                 (affixation-function . ,affix)
+                                 (display-sort-function . identity)
+                                 (cycle-sort-function . identity))
+                    (complete-with-action action choices string predicate))))
+         (choice (completing-read "Tab: " table nil t)))
+    (switch-to-buffer (cdr (assoc choice choices)))))
 
 (defun canvas-browser--show-tabs ()
   "Give this page buffer its line of tabs.

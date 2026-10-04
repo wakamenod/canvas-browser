@@ -4647,6 +4647,35 @@ They are killed afterwards, and the icons known are forgotten."
   (should (eq (lookup-key canvas-browser-insert-map (kbd "C-<prior>"))
               #'tab-line-switch-to-prev-tab)))
 
+(ert-deftest canvas-browser-the-tabs-are-read-by-title-and-address ()
+  ;; GIVEN two pages of one title and one address, and a page of no title
+  ;; WHEN the tabs are offered as choices
+  ;; THEN each choice is the title and the address, in the order of the
+  ;;      tabs, AND the second of the same is told apart by a number, AND
+  ;;      each choice leads to its own buffer
+  (canvas-browser-test--with-pages '("*a*" "*b*" "*c*")
+    (dolist (page (seq-take pages 2))
+      (with-current-buffer page
+        (setq canvas-browser--title "YouTube"
+              canvas-browser--url "https://www.youtube.com/")))
+    (with-current-buffer (nth 2 pages)
+      (setq canvas-browser--url "https://e.org/"))
+    (let ((choices (canvas-browser--tab-choices)))
+      (should (equal (mapcar #'car choices)
+                     '("YouTube  https://www.youtube.com/"
+                       "YouTube  https://www.youtube.com/ <2>"
+                       "https://e.org/  https://e.org/")))
+      (should (equal (mapcar #'cdr choices) pages)))))
+
+(ert-deftest canvas-browser-c-c-c-t-reads-a-tab-in-both-states ()
+  ;; GIVEN the maps of normal and insert state
+  ;; WHEN C-c C-t is looked up
+  ;; THEN it reads a tab in both, as the tab keys do
+  (should (eq (lookup-key canvas-browser-mode-map (kbd "C-c C-t"))
+              #'canvas-browser-switch-tab))
+  (should (eq (lookup-key canvas-browser-insert-map (kbd "C-c C-t"))
+              #'canvas-browser-switch-tab)))
+
 (ert-deftest canvas-browser-a-tab-is-named-by-its-title-cut-short ()
   ;; GIVEN a page with a long title, and one with no title yet
   ;; WHEN their tabs are named

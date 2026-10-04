@@ -184,6 +184,7 @@ Normal state keeps the keys of Emacs:
 | `y` | copies the address of this page, as `f y` copies the address of a link |
 | `O` | the same in a page buffer of its own, as the `O` of Vimium and qutebrowser opens a tab |
 | `C-<next>`, `C-<prior>` | go to the next and the previous tab, in insert state as well |
+| `C-c C-t` | choose a tab by its title or address, from a list with the icons |
 | `g` | reads the page again |
 | `M-p`, `M-n` | go back and forward in the history |
 | `n`, `p` | scroll a line further down and back |
@@ -458,7 +459,9 @@ and a window that showed it shows the tab to its right, or to its left
 for the last tab. The `+` asks for a URL and opens it in this window.
 `C-<next>` and `C-<prior>` go to the next and the previous tab, as
 Control with Page Down and Page Up do in a browser; `C-TAB` stays with
-`tab-bar-mode`. An embedded page has no tab: it belongs to the buffer it
+`tab-bar-mode`. `C-c C-t` reads a tab by its title or address, from a
+list that shows the icon of each page, and shows the one you choose.
+An embedded page has no tab: it belongs to the buffer it
 is in.
 
 The icon is the one the page names in its head, or the one at
