@@ -2727,6 +2727,7 @@ and the settings.  The widths line the columns of the two rows up."
    ("o" "open" canvas-browser-open-url)
    ("O" "new" canvas-browser)
    ("x" "close" canvas-browser-close-tab)
+   ("X" "reopen" canvas-browser-reopen-tab)
    ("g" "reload" canvas-browser-refresh)
    ("b" "back" canvas-browser-back)
    ("F" "forward" canvas-browser-forward)
@@ -2808,7 +2809,8 @@ keys zoom the page.  `g\=' is `revert-buffer\=', which reads it again.")
   "C-<next>" #'tab-line-switch-to-next-tab
   "C-<prior>" #'tab-line-switch-to-prev-tab
   "C-c C-t" #'canvas-browser-switch-tab
-  "x" #'canvas-browser-close-tab)
+  "x" #'canvas-browser-close-tab
+  "X" #'canvas-browser-reopen-tab)
 
 ;;;; The caret of the page
 
@@ -3589,6 +3591,7 @@ nothing the window does not.  Take the mode out of
         canvas-keys-group 'canvas-browser
         canvas-keys-zoom-function #'canvas-browser--zoom-by-key
         canvas-keys-redraw-function #'canvas-browser-refresh)
+  (add-hook 'kill-buffer-hook #'canvas-browser--remember-closed nil t)
   (add-hook 'kill-buffer-hook #'canvas-browser--release nil t)
   ;; Any command may change the page anywhere, so what was moving before
   ;; it says nothing about the page after it.
@@ -3798,6 +3801,50 @@ tab does."
   (unless (derived-mode-p 'canvas-browser-mode)
     (user-error "canvas-browser: this buffer is no page"))
   (canvas-browser--close-tab (current-buffer)))
+
+(defconst canvas-browser--closed-tabs-limit 25
+  "The most closed tabs that `canvas-browser-reopen-tab\=' keeps.")
+
+(defvar canvas-browser--closed-tabs nil
+  "The tabs closed in this session, the one closed last first.
+Each is a plist of :url, :title, :icon, the address of its icon, and
+:place, its `canvas-browser--opened\=', which puts it back where it was.")
+
+(defun canvas-browser--remember-closed ()
+  "Keep this tab among the closed ones, so that `X\=' can open it again.
+It runs as the buffer is killed, so a tab closed by its `×\=', by `x\=' or
+by `kill-buffer\=' is kept alike.  An embedded page is no tab."
+  (when (and canvas-browser--url (canvas-browser--tab-p (current-buffer)))
+    (push (list :url canvas-browser--url
+                :title canvas-browser--title
+                :icon canvas-browser--icon-url
+                :place canvas-browser--opened)
+          canvas-browser--closed-tabs)
+    (when (> (length canvas-browser--closed-tabs) canvas-browser--closed-tabs-limit)
+      (setcdr (nthcdr (1- canvas-browser--closed-tabs-limit) canvas-browser--closed-tabs)
+              nil))))
+
+(defun canvas-browser-reopen-tab ()
+  "Open again the tab closed last, in its place among the tabs, as `X\=' does
+in Vimium.  From a page it opens in the same window, as a new tab does.
+Its title and icon show at once; the page itself is read again."
+  (interactive)
+  (let* ((tab (or (pop canvas-browser--closed-tabs)
+                  (user-error "canvas-browser: no tab was closed in this session")))
+         (display-buffer-overriding-action
+          (if (derived-mode-p 'canvas-browser-mode)
+              '(display-buffer-same-window)
+            display-buffer-overriding-action))
+         (buffer (canvas-browser (plist-get tab :url))))
+    (with-current-buffer buffer
+      (when (plist-get tab :place)
+        (setq canvas-browser--opened (plist-get tab :place)))
+      (unless canvas-browser--title
+        (setq canvas-browser--title (plist-get tab :title)))
+      (when (and canvas-browser-tab-icons (stringp (plist-get tab :icon)))
+        (canvas-browser--take-icon-url (plist-get tab :icon)))
+      (canvas-browser--tabs-changed))
+    buffer))
 
 (defun canvas-browser-new-tab ()
   "Open a page in a new tab, in this window, as `+' of the tabs does."

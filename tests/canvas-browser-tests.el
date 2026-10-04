@@ -4925,6 +4925,34 @@ They are killed afterwards, and the icons known are forgotten."
     (should (eq (window-buffer) (nth 2 pages)))
     (setq pages (list (nth 0 pages) (nth 2 pages)))))
 
+(ert-deftest canvas-browser-x-opens-again-the-tab-closed-last-in-its-place ()
+  ;; GIVEN three pages, and the middle one closed
+  ;; WHEN X is pressed in a page
+  ;; THEN the middle page opens again, at its address, with its title,
+  ;;      between the other two, AND nothing is left to open again
+  (should (eq (lookup-key canvas-browser-mode-map "X") #'canvas-browser-reopen-tab))
+  (let ((canvas-browser--closed-tabs nil)
+        (canvas-browser-tab-icons nil)
+        (opened nil))
+    (canvas-browser-test--with-pages '("*a*" "*b*" "*c*")
+      (with-current-buffer (nth 1 pages)
+        (setq canvas-browser--url "https://b.org/"
+              canvas-browser--title "B"))
+      (kill-buffer (nth 1 pages))
+      (cl-letf (((symbol-function 'canvas-browser)
+                 (lambda (url)
+                   (let ((buffer (canvas-browser--make-page-buffer url)))
+                     (with-current-buffer buffer (setq canvas-browser--url url))
+                     (push buffer pages)
+                     (setq opened buffer)))))
+        (with-current-buffer (car (last pages 3))
+          (call-interactively #'canvas-browser-reopen-tab)))
+      (should (equal (buffer-local-value 'canvas-browser--url opened) "https://b.org/"))
+      (should (equal (buffer-local-value 'canvas-browser--title opened) "B"))
+      (should (eq (nth 1 (canvas-browser--tab-buffers)) opened))
+      (should-not canvas-browser--closed-tabs)
+      (setq pages (seq-filter #'buffer-live-p pages)))))
+
 (ert-deftest canvas-browser-c-c-c-t-reads-a-tab-in-both-states ()
   ;; GIVEN the maps of normal and insert state
   ;; WHEN C-c C-t is looked up
