@@ -610,6 +610,18 @@ Nothing of the virtual display is left from before, nor after."
 
 ;;;; Where the profile goes
 
+(ert-deftest canvas-browser-cdp-a-directory-of-the-home-is-expanded ()
+  ;; GIVEN a profile and an extension directory set under ~
+  ;; WHEN they are taken for chromium
+  ;; THEN both are absolute: chromium is started without a shell, and a
+  ;;      `~' would reach it as it is
+  (let ((canvas-browser-profile-directory "~/.cache/canvas-browser/p")
+        (canvas-browser-extension-directory "~/ext")
+        (process-environment (cons "HOME=/home/u" process-environment)))
+    (should (equal (canvas-browser-cdp--profile) "/home/u/.cache/canvas-browser/p"))
+    (should (equal (canvas-browser-cdp-extension-directory) "/home/u/ext"))))
+
+
 (ert-deftest canvas-browser-cdp-a-snap-keeps-its-profile-out-of-a-hidden-directory ()
   ;; GIVEN a chromium that is a snap, and then one that is not
   ;; WHEN the profile directory is chosen

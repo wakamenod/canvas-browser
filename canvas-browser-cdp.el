@@ -99,14 +99,20 @@ chromium loads every one when it starts.  Nil lets
                     "canvas-browser: no chromium; run `sudo snap install chromium'"))))
 
 (defun canvas-browser-cdp--profile ()
-  "The profile directory in use."
-  (or canvas-browser-profile-directory
-      (canvas-browser-cdp--profile-for (canvas-browser-cdp--executable))))
+  "The profile directory in use, as an absolute file name.
+Chromium is started without a shell, so a `~' in the setting would reach
+it as it is; it is expanded here."
+  (expand-file-name
+   (or canvas-browser-profile-directory
+       (canvas-browser-cdp--profile-for (canvas-browser-cdp--executable)))))
 
 (defun canvas-browser-cdp-extension-directory ()
-  "The extension directory in use."
-  (or canvas-browser-extension-directory
-      (canvas-browser-cdp--extensions-for (canvas-browser-cdp--executable))))
+  "The extension directory in use, as an absolute file name.
+Its extensions go to chromium on its command line, which no shell reads,
+so a `~' in the setting is expanded here."
+  (expand-file-name
+   (or canvas-browser-extension-directory
+       (canvas-browser-cdp--extensions-for (canvas-browser-cdp--executable)))))
 
 (defun canvas-browser-cdp--extensions ()
   "The directories of the extensions chromium loads, in the order of their names.
