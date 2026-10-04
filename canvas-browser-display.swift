@@ -33,8 +33,32 @@ let width = arguments.first.flatMap { $0 } ?? 1920
 let height = arguments.last.flatMap { $0 } ?? 1200
 
 // The vendor of every display this program makes, which no display you
-// see has.
+// see has, and the product, which tells it from the display of another
+// program of that vendor.
 let vendor: UInt32 = 0x3456
+let product: UInt32 = 0x1234
+
+// The serial number of the new display: the least that no display online
+// has, of this vendor and product.  macOS knows a display by its vendor,
+// product and serial number, and writes a colour profile for every one
+// it has not seen, in /Library/ColorSync/Profiles/Displays, which it
+// never takes away.  A serial number of its own for every run, as the
+// process id was, left a profile behind for each run, and with a hundred
+// of them ColorSync spent a core rebuilding its profiles at every change
+// of a display, and kept every application waiting on it.  A display of
+// one serial number at a time is all macOS makes, so a second Emacs gets
+// the next.  One that started at the same moment may have taken it since,
+// and TAKEN holds those.
+func freeSerialNumber(besides taken: Set<UInt32>) -> UInt32 {
+  var count: UInt32 = 0
+  CGGetOnlineDisplayList(0, nil, &count)
+  var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+  CGGetOnlineDisplayList(count, &ids, &count)
+  let online = Set(ids.filter { CGDisplayVendorNumber($0) == vendor
+                                  && CGDisplayModelNumber($0) == product }
+                      .map { CGDisplaySerialNumber($0) })
+  return (1...).first { !online.contains($0) && !taken.contains($0) }!
+}
 
 let descriptor = CGVirtualDisplayDescriptor()
 descriptor.queue = DispatchQueue.main
@@ -45,13 +69,17 @@ descriptor.maxPixelsHigh = height
 descriptor.sizeInMillimeters = CGSize(width: Double(width) * 0.254,
                                       height: Double(height) * 0.254)
 descriptor.vendorID = vendor
-descriptor.productID = 0x1234
-// macOS makes no second display of the same serial number, and a second
-// Emacs wants a display of its own.
-descriptor.serialNum = UInt32(truncatingIfNeeded: getpid())
+descriptor.productID = product
 descriptor.terminationHandler = { _, _ in exit(0) }
 
-guard let display = CGVirtualDisplay(descriptor: descriptor) else {
+var tried = Set<UInt32>()
+var made: CGVirtualDisplay?
+while made == nil && tried.count < 8 {
+  descriptor.serialNum = freeSerialNumber(besides: tried)
+  tried.insert(descriptor.serialNum)
+  made = CGVirtualDisplay(descriptor: descriptor)
+}
+guard let display = made else {
   fail("macOS made no virtual display")
 }
 let settings = CGVirtualDisplaySettings()
