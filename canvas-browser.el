@@ -4472,7 +4472,8 @@ shows opens again when it is next shown."
                              (with-current-buffer buffer
                                (and (derived-mode-p 'canvas-browser-mode) canvas-browser--url)))
                            (buffer-list))))
-    (canvas-browser-cdp-stop)
+    ;; The virtual display stays for the new chromium.
+    (canvas-browser-cdp-stop 'keep-display)
     (dolist (page pages)
       (with-current-buffer page
         (canvas-browser--forget-page)))

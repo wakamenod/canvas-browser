@@ -493,6 +493,23 @@ Nothing of the virtual display is left from before, nor after."
     (should (equal (reverse killed) '(chromium display)))
     (should-not canvas-browser-cdp--display-process)))
 
+(ert-deftest canvas-browser-cdp-a-display-can-outlast-its-chromium ()
+  ;; GIVEN chromium on the virtual display
+  ;; WHEN the client stops and keeps the display, as a restart does
+  ;; THEN chromium is stopped, AND the display stays for the next one:
+  ;;      each display made has ColorSync rebuild every colour profile
+  (let ((killed nil)
+        (canvas-browser-cdp--socket nil)
+        (canvas-browser-cdp--process 'chromium)
+        (canvas-browser-cdp--display-process 'display)
+        (canvas-browser-cdp--virtual-display '(:left 0 :top 0 :width 1 :height 1)))
+    (cl-letf (((symbol-function 'delete-process) (lambda (process) (push process killed)))
+              ((symbol-function 'canvas-browser-cdp--wait-for-exit) #'ignore))
+      (canvas-browser-cdp-stop 'keep-display))
+    (should (equal killed '(chromium)))
+    (should (eq canvas-browser-cdp--display-process 'display))
+    (should canvas-browser-cdp--virtual-display)))
+
 (ert-deftest canvas-browser-cdp-start-runs-chromium-headless-once ()
   ;; GIVEN a stubbed process and websocket
   ;; WHEN the client starts twice and then stops
@@ -706,12 +723,15 @@ Nothing of the virtual display is left from before, nor after."
   ;; GIVEN a chromium of ours that still runs but does not answer its port
   ;; WHEN the client starts
   ;; THEN that chromium is stopped, and waited for, before a new one is
-  ;;      started, which then holds the profile alone
+  ;;      started, which then holds the profile alone, AND a display it
+  ;;      drew on stays for the new one
   (canvas-browser-cdp-test--with-port-file
     (let ((happened nil)
           (canvas-browser-headless t)
           (canvas-browser-cdp--socket nil)
-          (canvas-browser-cdp--process 'chromium))
+          (canvas-browser-cdp--process 'chromium)
+          (canvas-browser-cdp--display-process 'display)
+          (canvas-browser-cdp--virtual-display '(:left 0 :top 0 :width 1 :height 1)))
       (cl-letf (((symbol-function 'executable-find) (lambda (name) (concat "/usr/bin/" name)))
                 ((symbol-function 'canvas-browser-cdp-alive-p)
                  (lambda () (eq canvas-browser-cdp--process 'chromium)))
@@ -732,6 +752,7 @@ Nothing of the virtual display is left from before, nor after."
         (should (eq (canvas-browser-cdp-start) 'started))
         (should (equal (reverse happened)
                        '((killed chromium) (waited chromium) (started))))
+        (should (eq canvas-browser-cdp--display-process 'display))
         (should (eq canvas-browser-cdp--process 'new))))))
 
 (ert-deftest canvas-browser-cdp-connecting-only-starts-no-chromium ()

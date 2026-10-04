@@ -4293,11 +4293,14 @@ file that names the zip, into the directory it is given."
                 (canvas-browser-mode)
                 (canvas-browser--open "https://example.org" 800 600)))
             (setq canvas-browser-test--commands nil)
-            (cl-letf (((symbol-function 'canvas-browser-cdp-stop) (lambda () (setq stopped t)))
+            (cl-letf (((symbol-function 'canvas-browser-cdp-stop)
+                       (lambda (&optional keep-display) (setq stopped (if keep-display 'kept t))))
                       ((symbol-function 'get-buffer-window)
                        (lambda (buffer &rest _) (and (eq buffer shown) 'a-window))))
               (canvas-browser-restart-chromium))
-            (should stopped)
+            ;; The virtual display stays for the new chromium: a display
+            ;; made again has ColorSync rebuild every colour profile.
+            (should (eq stopped 'kept))
             (should-not (buffer-local-value 'canvas-browser--session hidden))
             (should (equal "S1" (buffer-local-value 'canvas-browser--session shown)))
             (should (equal 1 (cl-count "Target.createTarget" canvas-browser-test--commands
@@ -4324,7 +4327,7 @@ file that names the zip, into the directory it is given."
             (setq canvas-browser-test--commands nil)
             (let ((running t) (started 0) (said nil))
               (cl-letf (((symbol-function 'canvas-browser-cdp-running-p) (lambda () running))
-                        ((symbol-function 'canvas-browser-cdp-stop) (lambda () (setq running nil)))
+                        ((symbol-function 'canvas-browser-cdp-stop) (lambda (&rest _) (setq running nil)))
                         ((symbol-function 'canvas-browser-cdp-start)
                          (lambda (&optional _connect-only)
                            (unless running

@@ -702,7 +702,7 @@ answer is stopped instead, so that a new one can take the profile."
           t)
       (error
        (message "canvas-browser: chromium does not answer; stopping it")
-       (canvas-browser-cdp-stop)
+       (canvas-browser-cdp-stop 'keep-display)
        nil))))
 
 (defun canvas-browser-cdp--launch ()
@@ -749,10 +749,13 @@ to end it."
                   (< (float-time) deadline))
         (sleep-for 0.01)))))
 
-(defun canvas-browser-cdp-stop ()
+(defun canvas-browser-cdp-stop (&optional keep-display)
   "Close the websocket, stop chromium, and then its virtual display.
 The display goes last: macOS would move the windows still on it onto
-your own screen."
+your own screen.  With KEEP-DISPLAY the display stays, for the chromium
+started next: each display that comes or goes has ColorSync rebuild the
+colour profiles of every display, and one more change while it is at
+it has been seen to keep it at that for as long as the display lasts."
   (when-let* ((socket canvas-browser-cdp--socket))
     ;; The socket is forgotten before it is closed, so that its closing
     ;; is not taken for a connection lost.
@@ -768,7 +771,8 @@ your own screen."
       ;; A chromium started next on the profile hands its work to this
       ;; one while it is still there.
       (canvas-browser-cdp--wait-for-exit process)))
-  (canvas-browser-cdp--stop-display)
+  (unless keep-display
+    (canvas-browser-cdp--stop-display))
   (canvas-browser-cdp--forget-commands))
 
 (provide 'canvas-browser-cdp)
