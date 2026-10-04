@@ -521,7 +521,7 @@ while the strategy is left at its default.
 Chromium on macOS draws on no X display, so `Xvfb` cannot hide it.
 macOS can make a display of its own instead, one that no screen shows,
 and chromium draws its windows there. `canvas-browser-display` makes
-that display. It is a program of a hundred lines in Swift, which you build
+that display. It is a program of 150 lines in Swift, which you build
 next to canvas-browser with the Swift of the Xcode command line tools:
 
     make display
@@ -530,7 +530,18 @@ The display touches your main display at its bottom right corner and
 nowhere else, and each page opens in a window of its own on it, so
 nothing of chromium comes into view, not even a window a page opens to
 sign in. The sites see the same Chrome as with a window on `Xvfb`, with
-the WebGL of the graphics card. The display lasts as long as the
+the WebGL of the graphics card.
+
+macOS keeps every display touching another and lets the pointer through
+that corner, so the program puts a pointer that wanders onto the display
+back on the nearest point of a display you see: moved toward the corner,
+it stops there as at a wall. The program hears the mouse move in any
+application, which needs no permission for the mouse, and looks every
+quarter of a second for a pointer another program moved; waiting, it
+takes no time of the processor. Pages take their clicks and keys from
+chromium, not from the pointer, so this does not touch them.
+
+The display lasts as long as the
 program; Emacs starts it with chromium and stops it after chromium, and
 when the program ends by itself chromium is stopped too, since macOS
 would move its windows onto your screen. The program uses classes of
