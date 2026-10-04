@@ -70,12 +70,21 @@ descriptor.sizeInMillimeters = CGSize(width: Double(width) * 0.254,
                                       height: Double(height) * 0.254)
 descriptor.vendorID = vendor
 descriptor.productID = product
+// The colours of the display, which ColorSync builds its profile from.
+// A display that gives none leaves ColorSync to make them up; these are
+// the ones the virtual displays of Chromium's own tests give.
+descriptor.redPrimary = CGPoint(x: 0.6797, y: 0.3203)
+descriptor.greenPrimary = CGPoint(x: 0.2559, y: 0.6983)
+descriptor.bluePrimary = CGPoint(x: 0.1494, y: 0.0557)
+descriptor.whitePoint = CGPoint(x: 0.3125, y: 0.3291)
 descriptor.terminationHandler = { _, _ in exit(0) }
 
 var tried = Set<UInt32>()
 var made: CGVirtualDisplay?
 while made == nil && tried.count < 8 {
   descriptor.serialNum = freeSerialNumber(besides: tried)
+  // Newer macOS reads the serial number from this one as well.
+  descriptor.serialNumber = descriptor.serialNum
   tried.insert(descriptor.serialNum)
   made = CGVirtualDisplay(descriptor: descriptor)
 }
