@@ -558,6 +558,7 @@ for something then is left to the connection on its way.")
 
 (defvar canvas-browser--screencast)
 (defvar canvas-browser--focused)
+(defvar canvas-browser--waiting)
 
 (defun canvas-browser--lose-session ()
   "Forget the session of this page, but not its target.
@@ -628,6 +629,9 @@ The connection to chromium is made again when it is gone, and the page
 attached or opened again when it alone lost its session.  The command
 itself is dropped: it was meant for the page as it was."
   (cond
+   ;; A tab of the last session is read once it is asked for.
+   ((and canvas-browser--waiting (canvas-browser--shown-p))
+    (canvas-browser--load-tab))
    ((not (canvas-browser--page-p))
     (user-error "canvas-browser: this buffer shows no page"))
    (canvas-browser--reconnecting nil)
@@ -1023,6 +1027,8 @@ it again."
   (canvas-browser--adopt width height)
   (setq canvas-browser--url url
         canvas-browser--opening t)
+  ;; A new tab is one more to keep for the next session.
+  (canvas-browser--keep-tabs-soon)
   (let ((buffer (current-buffer)))
     (canvas-browser-cdp-send
      "Target.createTarget"
@@ -3593,7 +3599,14 @@ nothing the window does not.  Take the mode out of
   (format "*canvas-browser: %s*" url))
 
 (defun canvas-browser--page-buffer (url)
-  "A new page buffer for URL."
+  "A new page buffer for URL.
+The tabs of the last session come back first, the first time a page is
+made in this one, so that they stand to the left of the new page."
+  (canvas-browser--restore-tabs-once)
+  (canvas-browser--make-page-buffer url))
+
+(defun canvas-browser--make-page-buffer (url)
+  "A new page buffer for URL, which nothing shows yet."
   (let ((buffer (generate-new-buffer (canvas-browser--buffer-name url))))
     (with-current-buffer buffer (canvas-browser-mode))
     buffer))
@@ -3756,8 +3769,11 @@ come first, since tab-line reads two of them by their place."
 
 (defun canvas-browser--tabs-changed ()
   "Draw the tabs of every window again: a tab changed its name or its icon.
-A window that shows another page shows this page's tab as well."
-  (force-mode-line-update t))
+A window that shows another page shows this page's tab as well.  The
+tabs are kept for the next session soon after, since a tab came, went,
+or changed."
+  (force-mode-line-update t)
+  (canvas-browser--keep-tabs-soon))
 
 (defun canvas-browser--close-tab (buffer)
   "Close the tab of BUFFER: kill the page.
@@ -4057,6 +4073,203 @@ Its side is `canvas-browser--icon-pixels\='; an icon is square."
       (delete-file picture)
       (delete-file png))))
 
+;;;; The tabs, kept for the next session
+
+(defcustom canvas-browser-keep-tabs t
+  "Whether the tabs are kept when Emacs ends, and come back in the next session.
+They come back the first time a page is opened in the next session, to
+the left of that page, and not when Emacs starts: canvas-browser is not
+loaded until it is used.  A tab that comes back is not read until it is
+shown, so neither chromium nor the pages of the other tabs start for it.
+`canvas-browser-restore-tabs' brings them back without opening a page.
+
+It is on by default, as a browser keeps its tabs: a tab costs nothing
+until it is shown, and the file is written only once canvas-browser has
+been used."
+  :type 'boolean
+  :group 'canvas-browser)
+
+(defcustom canvas-browser-tabs-file
+  (locate-user-emacs-file "canvas-browser-tabs.eld")
+  "The file the tabs are kept in for the next session.
+It holds the address, the title and the address of the icon of each
+tab, in their order, as an S-expression."
+  :type 'file
+  :group 'canvas-browser)
+
+(defconst canvas-browser--keep-tabs-delay 2
+  "Seconds to wait, after a tab changed, before the tabs are written.
+A page that loads changes its address and its title several times, and
+one write after them all is enough.")
+
+(defvar canvas-browser--tabs-restored nil
+  "Whether the tabs of the last session have been looked for in this one.
+They are looked for once.  Until then nothing is written, so that a
+session that has opened no page keeps the tabs of the last one.")
+
+(defvar canvas-browser--kept-tabs nil
+  "What was last written to `canvas-browser-tabs-file\=', to write it only
+when it changes.")
+
+(defvar canvas-browser--keep-tabs-timer nil
+  "The timer that writes the tabs a moment after they changed, or nil.")
+
+(defvar-local canvas-browser--waiting nil
+  "Whether this tab came back from the last session and has not been read.
+It has an address, a title and an icon, and no canvas: it is read at
+the size of the window that first shows it.")
+
+(defvar canvas-browser--load-timer nil
+  "The timer that reads the waiting tabs a window shows, or nil.")
+
+(defun canvas-browser--tabs-to-keep ()
+  "The tabs as they are kept: a plist of their order and the tab shown last.
+:tabs holds a plist of :url, :title and :icon for each tab, in their
+order, and :current the place of the tab shown last among them.  A tab
+of no address yet has nothing to come back to, and is left out."
+  (let* ((tabs (seq-filter (lambda (buffer) (buffer-local-value 'canvas-browser--url buffer))
+                           (canvas-browser--tab-buffers)))
+         ;; `buffer-list' has the buffer shown last first.
+         (current (seq-find (lambda (buffer) (memq buffer tabs)) (buffer-list))))
+    (list :version 1
+          :current (seq-position tabs current)
+          :tabs (mapcar (lambda (buffer)
+                          (with-current-buffer buffer
+                            (list :url canvas-browser--url
+                                  :title canvas-browser--title
+                                  :icon canvas-browser--icon-url)))
+                        tabs))))
+
+(defun canvas-browser--write-tabs ()
+  "Write the tabs to `canvas-browser-tabs-file\=', if they changed.
+An error is told and not raised: this runs as Emacs ends, and a file
+that cannot be written must not keep Emacs from ending."
+  (when canvas-browser--keep-tabs-timer
+    (cancel-timer canvas-browser--keep-tabs-timer)
+    (setq canvas-browser--keep-tabs-timer nil))
+  (when (and canvas-browser-keep-tabs canvas-browser--tabs-restored)
+    (let ((tabs (canvas-browser--tabs-to-keep)))
+      (unless (equal tabs canvas-browser--kept-tabs)
+        (with-demoted-errors "canvas-browser: the tabs were not kept: %S"
+          (make-directory (file-name-directory canvas-browser-tabs-file) t)
+          (let ((print-length nil)
+                (print-level nil)
+                (coding-system-for-write 'utf-8-unix))
+            (with-temp-file canvas-browser-tabs-file
+              (insert ";; The tabs of canvas-browser, kept for the next session.\n")
+              (prin1 tabs (current-buffer))
+              (insert "\n")))
+          (setq canvas-browser--kept-tabs tabs))))))
+
+(defun canvas-browser--keep-tabs-soon ()
+  "Write the tabs in a moment, once with every change made meanwhile.
+They are written as they change, and not only as Emacs ends, so that an
+Emacs that crashes keeps them as well."
+  (when (and canvas-browser-keep-tabs canvas-browser--tabs-restored
+             (not canvas-browser--keep-tabs-timer))
+    (setq canvas-browser--keep-tabs-timer
+          (run-with-timer canvas-browser--keep-tabs-delay nil #'canvas-browser--write-tabs))))
+
+(add-hook 'kill-emacs-hook #'canvas-browser--write-tabs)
+
+(defun canvas-browser--read-tabs ()
+  "The tabs kept in `canvas-browser-tabs-file\=', as written, or nil.
+A file that cannot be read is told, and leaves no tabs to bring back."
+  (when (file-readable-p canvas-browser-tabs-file)
+    (condition-case err
+        (with-temp-buffer
+          (let ((coding-system-for-read 'utf-8-unix))
+            (insert-file-contents canvas-browser-tabs-file))
+          (let ((tabs (read (current-buffer))))
+            (and (plist-get tabs :tabs) tabs)))
+      (error (message "canvas-browser: %s could not be read: %s"
+                      canvas-browser-tabs-file (error-message-string err))
+             nil))))
+
+(defun canvas-browser--waiting-tab (tab)
+  "A tab for TAB, a plist of a kept tab, which waits to be shown; its buffer.
+It is not shown, so that a rule of `display-buffer-alist\=' opens no
+window for it.  Its icon is fetched by Emacs, as no page asks for it."
+  (let ((url (plist-get tab :url))
+        (title (plist-get tab :title))
+        (icon (plist-get tab :icon)))
+    (when (stringp url)
+      (let ((buffer (canvas-browser--make-page-buffer url)))
+        (with-current-buffer buffer
+          (setq canvas-browser--url url
+                canvas-browser--title (and (stringp title) title)
+                canvas-browser--waiting t)
+          (when (stringp icon)
+            (if canvas-browser-tab-icons
+                (canvas-browser--take-icon-url icon)
+              (setq canvas-browser--icon-url icon))))
+        buffer))))
+
+(defun canvas-browser--restore-tabs ()
+  "Bring the tabs of the last session back, waiting to be shown.
+The tabs are now looked for, whether or not there were any.  Return the
+tab that was shown last, or the last tab, or nil when none came back."
+  (setq canvas-browser--tabs-restored t)
+  (let* ((kept (canvas-browser--read-tabs))
+         ;; The file holds the tabs as they are now, and need not be
+         ;; written again until they change.
+         (_ (setq canvas-browser--kept-tabs kept))
+         (current (plist-get kept :current))
+         (buffers (mapcar #'canvas-browser--waiting-tab (plist-get kept :tabs))))
+    (or (and (natnump current) (nth current buffers))
+        (car (last (delq nil buffers))))))
+
+(defun canvas-browser--restore-tabs-once ()
+  "Bring the tabs of the last session back, if that is wanted and not done."
+  (when (and canvas-browser-keep-tabs (not canvas-browser--tabs-restored))
+    (canvas-browser--restore-tabs)))
+
+;;;###autoload
+(defun canvas-browser-restore-tabs ()
+  "Bring back the tabs of the last session, and show the one shown last.
+That tab alone is read; each of the others is read when it is shown.
+The tabs come back once a session: the first page opened brings them
+back too, when `canvas-browser-keep-tabs\=' is on."
+  (interactive)
+  (if canvas-browser--tabs-restored
+      (message "canvas-browser: the tabs of the last session are back already")
+    (if-let* ((shown (canvas-browser--restore-tabs)))
+        (pop-to-buffer shown)
+      (message "canvas-browser: no tabs were kept from the last session"))))
+
+(defun canvas-browser--load-tab ()
+  "Read this waiting tab, at the size of the window that shows it.
+A tab no window shows has no size to be read at, and waits on."
+  (when-let* ((window (get-buffer-window (current-buffer) t)))
+    (setq canvas-browser--waiting nil)
+    (canvas-browser--open canvas-browser--url
+                          (window-body-width window t)
+                          (window-body-height window t))))
+
+(defun canvas-browser--load-shown-tabs ()
+  "Read the waiting tabs that a window shows."
+  (setq canvas-browser--load-timer nil)
+  (dolist (buffer (canvas-browser--tab-buffers))
+    (when (and (buffer-local-value 'canvas-browser--waiting buffer)
+               (canvas-browser--shown-p buffer))
+      (with-current-buffer buffer
+        (canvas-browser--load-tab)))))
+
+(defun canvas-browser--follow-waiting-tabs (&rest _)
+  "Have a waiting tab read once a window shows it, as the tab is clicked,
+switched to or shown by any other means.
+It is read just after the windows change, not while they do: starting
+chromium waits for it, and Emacs is drawing the windows meanwhile."
+  (when (and (not canvas-browser--load-timer)
+             (seq-some (lambda (buffer)
+                         (and (buffer-local-value 'canvas-browser--waiting buffer)
+                              (canvas-browser--shown-p buffer)))
+                       (canvas-browser--tab-buffers)))
+    (setq canvas-browser--load-timer
+          (run-with-timer 0 nil #'canvas-browser--load-shown-tabs))))
+
+(add-hook 'window-configuration-change-hook #'canvas-browser--follow-waiting-tabs)
+
 ;;;; As the browser of Emacs
 
 (defcustom canvas-browser-fallback-browser #'eww-browse-url
@@ -4317,7 +4530,10 @@ It is the `bookmark-make-record-function' of a page buffer."
 
 ;;;###autoload
 (defun canvas-browser-bookmark-jump (bookmark)
-  "Open the page of BOOKMARK, in the page buffer that shows it if there is one."
+  "Open the page of BOOKMARK, in the page buffer that shows it if there is one.
+The tabs of the last session come back first, so that a tab of the page
+among them is shown rather than a second one opened."
+  (canvas-browser--restore-tabs-once)
   (let ((url (bookmark-prop-get bookmark 'location)))
     (set-buffer (or (canvas-browser--buffer-showing url)
                     (canvas-browser url)))))
@@ -4470,7 +4686,10 @@ shows opens again when it is next shown."
   (interactive)
   (let ((pages (seq-filter (lambda (buffer)
                              (with-current-buffer buffer
-                               (and (derived-mode-p 'canvas-browser-mode) canvas-browser--url)))
+                               ;; A tab still waiting to be shown has no
+                               ;; page to open again.
+                               (and (derived-mode-p 'canvas-browser-mode) canvas-browser--url
+                                    (not canvas-browser--waiting))))
                            (buffer-list))))
     ;; The virtual display stays for the new chromium.
     (canvas-browser-cdp-stop 'keep-display)

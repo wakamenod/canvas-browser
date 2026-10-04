@@ -3,6 +3,12 @@
 (require 'cl-lib)
 (require 'canvas-browser)
 
+;; The tests never read or write the tabs you keep; those that keep tabs
+;; turn it on, with a file of their own.
+(setq canvas-browser-keep-tabs nil
+      canvas-browser-tabs-file (make-temp-name
+                                (expand-file-name "canvas-browser-tabs-" temporary-file-directory)))
+
 (defvar smear-cursor-mode)
 
 (defvar canvas-browser-test--commands nil
@@ -5206,3 +5212,255 @@ ANSWERS is an alist of METHOD and a list of results, given in turn."
         (should (equal (plist-get (canvas-browser-test--params "Emulation.setDeviceMetricsOverride")
                                   :height)
                        578))))))
+
+
+;;;; The tabs, kept for the next session
+
+(defmacro canvas-browser-test--keeping-tabs (&rest body)
+  "Run BODY as a new session that keeps its tabs in a file of its own.
+The page buffers it made are killed afterwards, and the file deleted.
+Icons are fetched by nobody: the addresses asked for go to `fetched'."
+  (declare (indent 0))
+  `(let* ((canvas-browser-keep-tabs t)
+          (canvas-browser-tabs-file (make-temp-file "canvas-browser-tabs-" nil ".eld"))
+          (canvas-browser--tabs-restored nil)
+          (canvas-browser--kept-tabs nil)
+          (canvas-browser--keep-tabs-timer nil)
+          (canvas-browser--load-timer nil)
+          (canvas-browser--icons (make-hash-table :test #'equal))
+          (canvas-browser--site-icons (make-hash-table :test #'equal))
+          (before (buffer-list))
+          (fetched nil))
+     (cl-letf (((symbol-function 'canvas-browser--fetch-icon-directly)
+                (lambda (url then) (push url fetched) (funcall then nil))))
+       (unwind-protect
+           (progn ,@body)
+         (when canvas-browser--keep-tabs-timer (cancel-timer canvas-browser--keep-tabs-timer))
+         (when canvas-browser--load-timer (cancel-timer canvas-browser--load-timer))
+         (dolist (buffer (buffer-list))
+           (unless (memq buffer before)
+             (when (eq (buffer-local-value 'major-mode buffer) 'canvas-browser-mode)
+               (cl-letf (((symbol-function 'canvas-browser--release) #'ignore))
+                 (kill-buffer buffer)))))
+         (delete-file canvas-browser-tabs-file)))))
+
+(defun canvas-browser-test--keep (tabs current)
+  "Write TABS, each (URL TITLE ICON), as the last session kept them, CURRENT shown last."
+  (with-temp-file canvas-browser-tabs-file
+    (prin1 (list :version 1 :current current
+                 :tabs (mapcar (lambda (tab)
+                                 (list :url (nth 0 tab) :title (nth 1 tab) :icon (nth 2 tab)))
+                               tabs))
+           (current-buffer))))
+
+(defun canvas-browser-test--tab-urls ()
+  "The addresses of the tabs, in their order."
+  (mapcar (lambda (buffer) (buffer-local-value 'canvas-browser--url buffer))
+          (canvas-browser--tab-buffers)))
+
+(ert-deftest canvas-browser-the-tabs-are-written-as-they-stand ()
+  ;; GIVEN two pages with addresses, titles and icons, an embedded page,
+  ;;       and the second page shown last
+  ;; WHEN the tabs are written
+  ;; THEN the file holds the two pages in their order, with their titles
+  ;;      and icons, and the second as the one shown last; the embedded
+  ;;      page belongs to the buffer it is in, and is left out
+  (canvas-browser-test--keeping-tabs
+    (setq canvas-browser--tabs-restored t)
+    (canvas-browser-test--with-pages '("*a*" " *canvas-browser embed: x*" "*b*")
+      (cl-loop for page in pages
+               for name in '("a" "x" "b")
+               do (with-current-buffer page
+                    (setq canvas-browser--url (format "https://%s.org/" name)
+                          canvas-browser--title (upcase name)
+                          canvas-browser--icon-url (format "https://%s.org/i.png" name))))
+      (switch-to-buffer (nth 2 pages))
+      (canvas-browser--write-tabs)
+      (let ((kept (canvas-browser--read-tabs)))
+        (should (equal (plist-get kept :tabs)
+                       '((:url "https://a.org/" :title "A" :icon "https://a.org/i.png")
+                         (:url "https://b.org/" :title "B" :icon "https://b.org/i.png"))))
+        (should (equal (plist-get kept :current) 1))))))
+
+(ert-deftest canvas-browser-nothing-is-written-before-the-tabs-came-back ()
+  ;; GIVEN tabs kept from the last session, and a session that has
+  ;;       opened no page yet
+  ;; WHEN Emacs ends, or a tab changes
+  ;; THEN the file is left as it is: the session has not brought the
+  ;;      tabs back, and writing its own would lose them
+  (canvas-browser-test--keeping-tabs
+    (canvas-browser-test--keep '(("https://a.org/" "A" nil)) 0)
+    (let ((before (with-temp-buffer
+                    (insert-file-contents canvas-browser-tabs-file)
+                    (buffer-string))))
+      (canvas-browser--tabs-changed)
+      (should-not canvas-browser--keep-tabs-timer)
+      (canvas-browser--write-tabs)
+      (should (equal (with-temp-buffer
+                       (insert-file-contents canvas-browser-tabs-file)
+                       (buffer-string))
+                     before)))))
+
+(ert-deftest canvas-browser-a-change-of-the-tabs-is-written-a-moment-later-once ()
+  ;; GIVEN a session whose tabs came back
+  ;; WHEN the tabs change several times in a row
+  ;; THEN one write is set for a moment later, not one for each change
+  (canvas-browser-test--keeping-tabs
+    (setq canvas-browser--tabs-restored t)
+    (let ((timers 0))
+      (cl-letf (((symbol-function 'run-with-timer)
+                 (lambda (&rest _) (cl-incf timers) (timer-create))))
+        (canvas-browser--tabs-changed)
+        (canvas-browser--tabs-changed)
+        (canvas-browser--tabs-changed))
+      (should (= timers 1)))))
+
+(ert-deftest canvas-browser-the-tabs-come-back-waiting-without-chromium ()
+  ;; GIVEN two tabs kept from the last session, with titles and icons
+  ;; WHEN they are brought back
+  ;; THEN each is a tab, in the order kept, named by its title, which no
+  ;;      window shows; chromium is neither started nor sent anything, and
+  ;;      Emacs fetches the icons itself
+  (canvas-browser-test--keeping-tabs
+    (canvas-browser-test--keep '(("https://a.org/" "A" "https://a.org/i.png")
+                                 ("https://b.org/" "B" "https://b.org/i.png"))
+                               1)
+    (let ((windows (window-list nil nil))
+          (chromium nil))
+      (cl-letf (((symbol-function 'canvas-browser-cdp-start)
+                 (lambda (&rest _) (setq chromium t)))
+                ((symbol-function 'canvas-browser-cdp-send)
+                 (lambda (&rest _) (setq chromium t))))
+        (should (equal (buffer-local-value 'canvas-browser--url (canvas-browser--restore-tabs))
+                       "https://b.org/")))
+      (should-not chromium)
+      (should (equal (canvas-browser-test--tab-urls) '("https://a.org/" "https://b.org/")))
+      (dolist (tab (canvas-browser--tab-buffers))
+        (should (buffer-local-value 'canvas-browser--waiting tab))
+        (should-not (get-buffer-window tab t)))
+      (should (equal (window-list nil nil) windows))
+      (should (string-match-p "\\` .* A \\'"
+                              (substring-no-properties
+                               (canvas-browser--tab-name (car (canvas-browser--tab-buffers))))))
+      (should (equal (sort fetched #'string<) '("https://a.org/i.png" "https://b.org/i.png"))))))
+
+(ert-deftest canvas-browser-a-tab-that-waits-is-kept-again-as-emacs-ends ()
+  ;; GIVEN tabs brought back, none of them shown
+  ;; WHEN Emacs ends
+  ;; THEN they are kept again as they were: a tab not read is not lost
+  (canvas-browser-test--keeping-tabs
+    (canvas-browser-test--keep '(("https://a.org/" "A" "https://a.org/i.png")
+                                 ("https://b.org/" "B" nil))
+                               0)
+    (canvas-browser--restore-tabs)
+    (setq canvas-browser--kept-tabs nil)
+    (run-hooks 'kill-emacs-hook)
+    (should (equal (plist-get (canvas-browser--read-tabs) :tabs)
+                   '((:url "https://a.org/" :title "A" :icon "https://a.org/i.png")
+                     (:url "https://b.org/" :title "B" :icon nil))))))
+
+(ert-deftest canvas-browser-the-first-page-brings-the-tabs-back-to-its-left ()
+  ;; GIVEN two tabs kept from the last session
+  ;; WHEN a page is opened, and then another
+  ;; THEN the kept tabs come back once, to the left of the first page,
+  ;;      and chromium opens that page alone
+  (canvas-browser-test--keeping-tabs
+    (canvas-browser-test--keep '(("https://a.org/" "A" nil) ("https://b.org/" "B" nil)) 0)
+    (canvas-browser-test--with-chromium
+      (canvas-browser "https://new.org/")
+      (canvas-browser "https://newer.org/")
+      (should (equal (canvas-browser-test--tab-urls)
+                     '("https://a.org/" "https://b.org/" "https://new.org/" "https://newer.org/")))
+      (should (= 2 (cl-count "Target.createTarget" canvas-browser-test--commands
+                             :key #'car :test #'equal))))))
+
+(ert-deftest canvas-browser-no-tabs-come-back-when-they-are-not-kept ()
+  ;; GIVEN tabs kept from the last session, and the keeping turned off
+  ;; WHEN a page is opened
+  ;; THEN it is the only tab
+  (canvas-browser-test--keeping-tabs
+    (canvas-browser-test--keep '(("https://a.org/" "A" nil)) 0)
+    (let ((canvas-browser-keep-tabs nil))
+      (canvas-browser-test--with-chromium
+        (canvas-browser "https://new.org/")
+        (should (equal (canvas-browser-test--tab-urls) '("https://new.org/")))))))
+
+(ert-deftest canvas-browser-a-bookmark-shows-its-tab-that-came-back ()
+  ;; GIVEN a tab kept from the last session
+  ;; WHEN a bookmark of its page is the first page opened
+  ;; THEN the tab that came back is the page, and no second one opens
+  (canvas-browser-test--keeping-tabs
+    (canvas-browser-test--keep '(("https://a.org/" "A" nil)) 0)
+    (canvas-browser-test--with-chromium
+      (cl-letf (((symbol-function 'bookmark-prop-get) (lambda (_b _p) "https://a.org/")))
+        (canvas-browser-bookmark-jump "A"))
+      (should (equal (canvas-browser-test--tab-urls) '("https://a.org/")))
+      (should-not (assoc "Target.createTarget" canvas-browser-test--commands)))))
+
+(ert-deftest canvas-browser-restoring-the-tabs-shows-the-one-shown-last ()
+  ;; GIVEN three tabs kept, the second shown last
+  ;; WHEN the tabs are restored by the command, and then again
+  ;; THEN the second tab is shown, and the second time nothing more comes
+  ;;      back
+  (canvas-browser-test--keeping-tabs
+    (canvas-browser-test--keep '(("https://a.org/" "A" nil) ("https://b.org/" "B" nil)
+                                 ("https://c.org/" "C" nil))
+                               1)
+    (let ((canvas-browser-keep-tabs nil))
+      (canvas-browser-restore-tabs)
+      (should (equal (buffer-local-value 'canvas-browser--url (window-buffer))
+                     "https://b.org/"))
+      (canvas-browser-restore-tabs)
+      (should (= 3 (length (canvas-browser--tab-buffers)))))))
+
+(ert-deftest canvas-browser-a-tab-that-waits-is-read-once-shown ()
+  ;; GIVEN two tabs that came back
+  ;; WHEN a window shows the second, and the windows have changed
+  ;; THEN that tab alone is read, at the size of its window
+  (canvas-browser-test--keeping-tabs
+    (canvas-browser-test--keep '(("https://a.org/" "A" nil) ("https://b.org/" "B" nil)) 0)
+    (canvas-browser--restore-tabs)
+    (canvas-browser-test--with-chromium
+      (let ((opened nil))
+        (cl-letf (((symbol-function 'canvas-browser--open)
+                   (lambda (url width height) (push (list url width height) opened))))
+          (switch-to-buffer (cadr (canvas-browser--tab-buffers)))
+          (canvas-browser--follow-waiting-tabs)
+          (should canvas-browser--load-timer)
+          (canvas-browser--load-shown-tabs))
+        (should (equal opened (list (list "https://b.org/"
+                                          (window-body-width nil t)
+                                          (window-body-height nil t)))))
+        (should-not (buffer-local-value 'canvas-browser--waiting (window-buffer)))
+        (should (buffer-local-value 'canvas-browser--waiting
+                                    (car (canvas-browser--tab-buffers))))))))
+
+(ert-deftest canvas-browser-a-command-in-a-tab-that-waits-reads-it ()
+  ;; GIVEN a tab that came back, shown, before it was read
+  ;; WHEN a command is sent to its page
+  ;; THEN the tab is read, rather than told it shows no page
+  (canvas-browser-test--keeping-tabs
+    (canvas-browser-test--keep '(("https://a.org/" "A" nil)) 0)
+    (switch-to-buffer (canvas-browser--restore-tabs))
+    (let ((opened nil))
+      (cl-letf (((symbol-function 'canvas-browser--open)
+                 (lambda (url &rest _) (push url opened))))
+        (canvas-browser--tell "Page.reload" nil))
+      (should (equal opened '("https://a.org/"))))))
+
+(ert-deftest canvas-browser-closing-a-tab-that-waits-starts-no-chromium ()
+  ;; GIVEN a tab that came back and was never read, and no chromium
+  ;; WHEN its tab is closed
+  ;; THEN it goes, and chromium is neither started nor sent anything
+  (canvas-browser-test--keeping-tabs
+    (canvas-browser-test--keep '(("https://a.org/" "A" nil)) 0)
+    (let ((tab (canvas-browser--restore-tabs))
+          (chromium nil))
+      (cl-letf (((symbol-function 'canvas-browser-cdp-start)
+                 (lambda (&rest _) (setq chromium t)))
+                ((symbol-function 'canvas-browser-cdp-send)
+                 (lambda (&rest _) (setq chromium t)))
+                ((symbol-function 'canvas-browser-cdp-running-p) #'ignore))
+        (canvas-browser--close-tab tab))
+      (should-not (buffer-live-p tab))
+      (should-not chromium))))

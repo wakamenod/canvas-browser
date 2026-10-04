@@ -553,6 +553,36 @@ opened after; the keys still go from page to page. The line is on by
 default because it shows only in the buffers of pages. The line takes a
 line of the window, and the page is laid out for what is left.
 
+### The tabs of the last session
+
+The tabs are kept when Emacs ends, and as they come, go or change, a
+moment after, so that an Emacs that crashes keeps them as well. For
+each tab, the file holds its address, its title and the address of its
+icon, in the order of the tabs, and which tab you were in last. The
+file is `canvas-browser-tabs.eld` in `user-emacs-directory`, or
+`canvas-browser-tabs-file`. An embedded page is not kept.
+
+The tabs come back the first time you open a page in the next session,
+with `M-x canvas-browser`, a link through `canvas-browser-browse-url`
+or a bookmark, and not when Emacs starts, so canvas-browser is still
+loaded only when you use it. They come back to the left of the page you
+open. A tab that comes back shows its title and its icon, which Emacs
+fetches itself, and nothing more: no window opens for it, and neither
+chromium nor its page is started. Its page is read when you show the
+tab, by a click, `C-c C-t`, `C-<next>` or any other way. Closing a tab
+that was never read starts nothing either.
+
+`M-x canvas-browser-restore-tabs` brings the tabs back without opening
+a page, and shows the tab you were in last; that tab alone is read. The
+tabs come back once in a session.
+
+Set `canvas-browser-keep-tabs` to nil to keep no tabs. It is on by
+default, as a browser keeps its tabs: a tab costs nothing until you
+show it, and the file is written only in a session that has used
+canvas-browser, so a session that has not keeps the tabs of the last
+one. `canvas-browser-restore-tabs` works with it off as well, from the
+file a session with it on kept.
+
 ## The map of canvas-minimap
 
 No map opens beside a page: canvas-browser puts `canvas-browser-mode`
@@ -724,6 +754,8 @@ Chrome for Testing here keeps it apart from the Chrome you browse with.
 | `canvas-browser-tabs` | t | whether a page buffer shows a line of tabs |
 | `canvas-browser-tab-icons` | t | whether a tab shows the icon of its page |
 | `canvas-browser-tab-width` | 24 | the most characters of a title a tab shows |
+| `canvas-browser-keep-tabs` | t | whether the tabs are kept, and come back in the next session |
+| `canvas-browser-tabs-file` | canvas-browser-tabs.eld in `user-emacs-directory` | the file they are kept in |
 
 A page that stops answering for a few seconds says so in the echo area,
 and `g` reads it again.
