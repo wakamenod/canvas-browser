@@ -664,3 +664,180 @@ Nothing of the virtual display is left from before, nor after."
       (canvas-browser-cdp-stop))
     (should-not closed)
     (should-not canvas-browser-cdp--socket)))
+
+;;;; A connection lost while chromium runs
+
+(defmacro canvas-browser-cdp-test--with-port-file (&rest body)
+  "Run BODY with a profile whose chromium has written its port file."
+  (declare (indent 0))
+  `(let* ((directory (make-temp-file "canvas-browser-test-" t))
+          (canvas-browser-profile-directory directory))
+     (unwind-protect
+         (progn
+           (with-temp-file (expand-file-name "DevToolsActivePort" directory)
+             (insert "45678\n/devtools/browser/abc-123\n"))
+           ,@body)
+       (delete-directory directory t))))
+
+(ert-deftest canvas-browser-cdp-a-chromium-that-still-runs-is-connected-to-again ()
+  ;; GIVEN a chromium of ours that still runs, whose websocket has closed
+  ;; WHEN the client starts
+  ;; THEN it connects to that chromium again at the port it wrote, AND no
+  ;;      second chromium is started: one on the same profile hands its
+  ;;      work to the first and exits, and nothing would answer
+  (canvas-browser-cdp-test--with-port-file
+    (let ((started nil) (address nil)
+          (canvas-browser-headless t)
+          (canvas-browser-cdp--socket nil)
+          (canvas-browser-cdp--process 'chromium))
+      (cl-letf (((symbol-function 'canvas-browser-cdp-alive-p) (lambda () t))
+                ((symbol-function 'make-process) (lambda (&rest _) (setq started t) 'second))
+                ((symbol-function 'websocket-open)
+                 (lambda (url &rest _) (setq address url) 'socket))
+                ((symbol-function 'canvas-browser-cdp--socket-live-p) (lambda (_socket) t))
+                ((symbol-function 'canvas-browser-cdp--open-p) (lambda (_socket) t)))
+        (should (eq (canvas-browser-cdp-start) 'connected))
+        (should-not started)
+        (should (equal address "ws://127.0.0.1:45678/devtools/browser/abc-123"))
+        (should (eq canvas-browser-cdp--process 'chromium))
+        (should (canvas-browser-cdp-running-p))))))
+
+(ert-deftest canvas-browser-cdp-a-chromium-that-does-not-answer-goes-before-a-new-one ()
+  ;; GIVEN a chromium of ours that still runs but does not answer its port
+  ;; WHEN the client starts
+  ;; THEN that chromium is stopped, and waited for, before a new one is
+  ;;      started, which then holds the profile alone
+  (canvas-browser-cdp-test--with-port-file
+    (let ((happened nil)
+          (canvas-browser-headless t)
+          (canvas-browser-cdp--socket nil)
+          (canvas-browser-cdp--process 'chromium))
+      (cl-letf (((symbol-function 'executable-find) (lambda (name) (concat "/usr/bin/" name)))
+                ((symbol-function 'canvas-browser-cdp-alive-p)
+                 (lambda () (eq canvas-browser-cdp--process 'chromium)))
+                ((symbol-function 'delete-process) (lambda (process) (push (list 'killed process) happened)))
+                ((symbol-function 'canvas-browser-cdp--wait-for-exit)
+                 (lambda (process) (push (list 'waited process) happened)))
+                ((symbol-function 'make-process)
+                 (lambda (&rest _) (push '(started) happened) 'new))
+                ((symbol-function 'websocket-open)
+                 (lambda (&rest _)
+                   (if (eq canvas-browser-cdp--process 'chromium)
+                       (error "Connection refused")
+                     'socket)))
+                ((symbol-function 'canvas-browser-cdp--address) (lambda () "ws://127.0.0.1:1/x"))
+                ((symbol-function 'canvas-browser-cdp--socket-live-p) (lambda (_socket) t))
+                ((symbol-function 'canvas-browser-cdp--open-p) (lambda (_socket) t))
+                ((symbol-function 'message) #'ignore))
+        (should (eq (canvas-browser-cdp-start) 'started))
+        (should (equal (reverse happened)
+                       '((killed chromium) (waited chromium) (started))))
+        (should (eq canvas-browser-cdp--process 'new))))))
+
+(ert-deftest canvas-browser-cdp-connecting-only-starts-no-chromium ()
+  ;; GIVEN a chromium that has gone, though Emacs has not heard it yet,
+  ;;       so that its port refuses
+  ;; WHEN the client is asked only to connect, as it is when the
+  ;;      connection is lost
+  ;; THEN that chromium is stopped, AND no new one is started: a page
+  ;;      starts one when it next asks
+  (canvas-browser-cdp-test--with-port-file
+    (let ((started nil)
+          (canvas-browser-cdp--socket nil)
+          (canvas-browser-cdp--process 'chromium))
+      (cl-letf (((symbol-function 'canvas-browser-cdp-alive-p)
+                 (lambda () (eq canvas-browser-cdp--process 'chromium)))
+                ((symbol-function 'delete-process) #'ignore)
+                ((symbol-function 'canvas-browser-cdp--wait-for-exit) #'ignore)
+                ((symbol-function 'make-process) (lambda (&rest _) (setq started t) 'new))
+                ((symbol-function 'websocket-open) (lambda (&rest _) (error "Connection refused")))
+                ((symbol-function 'message) #'ignore))
+        (should-not (canvas-browser-cdp-start 'connect-only))
+        (should-not started)
+        (should-not canvas-browser-cdp--process)))))
+
+(ert-deftest canvas-browser-cdp-a-connection-lost-is-told-once-it-is-lost ()
+  ;; GIVEN the websocket in use, and one Emacs closed itself
+  ;; WHEN each of them closes
+  ;; THEN only the one in use is forgotten and said to be lost: the other
+  ;;      one closed because Emacs stopped chromium or replaced it
+  (let* ((told 0)
+         (canvas-browser-cdp--socket 'in-use)
+         (canvas-browser-cdp-lost-hook (list (lambda () (cl-incf told)))))
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (_time _repeat function &rest args) (apply function args))))
+      (canvas-browser-cdp--closed 'closed-by-emacs)
+      (should (eq canvas-browser-cdp--socket 'in-use))
+      (should (= told 0))
+      (canvas-browser-cdp--closed 'in-use)
+      (should-not canvas-browser-cdp--socket)
+      (should (= told 1)))))
+
+(ert-deftest canvas-browser-cdp-a-connection-lost-says-why-and-when ()
+  ;; GIVEN the websocket in use, whose connection the system ended
+  ;; WHEN it closes
+  ;; THEN the reader is told what the system said and when, which tells a
+  ;;      sleep of the machine from chromium letting go
+  (let ((said nil)
+        (canvas-browser-cdp--socket 'in-use)
+        (canvas-browser-cdp--why-closed "connection broken by remote peer")
+        (canvas-browser-cdp-lost-hook nil))
+    (cl-letf (((symbol-function 'run-at-time) #'ignore)
+              ((symbol-function 'message)
+               (lambda (format &rest args) (setq said (apply #'format format args)))))
+      (canvas-browser-cdp--closed 'in-use))
+    (should (string-search "connection broken by remote peer" said))
+    (should (string-match-p "[0-9]+:[0-9]+:[0-9]+" said))))
+
+(ert-deftest canvas-browser-cdp-a-socket-that-refuses-is-a-connection-lost ()
+  ;; GIVEN a socket whose chromium was killed a moment ago, before Emacs
+  ;;       heard of it, so that it refuses what is sent
+  ;; WHEN a command is sent, as a timer or a filter does
+  ;; THEN nothing is signalled, the command is dropped, AND the connection
+  ;;      is taken for lost, so that it is made again
+  (canvas-browser-test--with-stub
+    (let* ((told 0)
+           (canvas-browser-cdp-lost-hook (list (lambda () (cl-incf told)))))
+      (cl-letf (((symbol-function 'websocket-send-text)
+                 (lambda (&rest _) (error "Output file descriptor of websocket is closed")))
+                ((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args) (apply function args)))
+                ((symbol-function 'message) #'ignore))
+        (should-not (canvas-browser-cdp-send "Page.reload" nil #'ignore "S1"))
+        (should-not canvas-browser-cdp--socket)
+        (should (= told 1))
+        (should (zerop (hash-table-count canvas-browser-cdp--waiting)))))))
+
+(ert-deftest canvas-browser-cdp-stopping-is-no-connection-lost ()
+  ;; GIVEN a running client
+  ;; WHEN it is stopped, which closes the websocket
+  ;; THEN nobody hears of a lost connection: chromium is not to be
+  ;;      connected to again
+  (let* ((told 0)
+         (canvas-browser-cdp--socket 'socket)
+         (canvas-browser-cdp--process nil)
+         (canvas-browser-cdp-lost-hook (list (lambda () (cl-incf told)))))
+    (cl-letf (((symbol-function 'canvas-browser-cdp--socket-live-p) (lambda (_socket) t))
+              ((symbol-function 'websocket-close) #'canvas-browser-cdp--closed)
+              ((symbol-function 'run-at-time)
+               (lambda (_time _repeat function &rest args) (apply function args))))
+      (canvas-browser-cdp-stop))
+    (should (= told 0))
+    (should-not canvas-browser-cdp--socket)))
+
+(ert-deftest canvas-browser-cdp-a-session-chromium-forgot-is-told ()
+  ;; GIVEN a command sent in a session
+  ;; WHEN chromium answers that it knows no such session
+  ;; THEN whoever listens hears which session it was, AND the reader is
+  ;;      not told, since the page is brought back
+  (canvas-browser-test--with-stub
+    (let ((lost nil) (said nil)
+          (canvas-browser-cdp-session-lost-functions nil))
+      (add-hook 'canvas-browser-cdp-session-lost-functions (lambda (session) (push session lost)))
+      (cl-letf (((symbol-function 'message) (lambda (&rest args) (setq said args))))
+        (let ((id (canvas-browser-cdp-send "Page.reload" nil nil "S9")))
+          (canvas-browser-cdp--receive
+           (json-encode (list :id id :error '(:code -32001
+                                               :message "Session with given id not found."))))))
+      (should (equal lost '("S9")))
+      (should-not said))))

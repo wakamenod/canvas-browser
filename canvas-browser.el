@@ -541,17 +541,135 @@ than `canvas-browser-frame-interval\=' allows."
 
 ;;;; The page
 
-(defvar-local canvas-browser--restarting nil
-  "Whether this buffer is opening its page again after chromium died.")
+(defvar-local canvas-browser--opening nil
+  "Whether this page waits for chromium to give it a session.
+A page asked for something meanwhile is not opened a second time.")
 
-(defun canvas-browser--restart ()
-  "Start chromium again and open this page afresh.
-The flag keeps the commands of the fresh page out of this path, which
-would otherwise call itself for each of them."
-  (let ((canvas-browser--restarting t))
-    (message "canvas-browser: chromium is gone; starting it again")
-    (canvas-browser-cdp-start)
+(defvar canvas-browser--reconnecting nil
+  "Whether Emacs is connecting to chromium again for every page.
+Starting chromium waits, and timers run while it does; a page that asks
+for something then is left to the connection on its way.")
+
+(defun canvas-browser--page-buffers ()
+  "Every page buffer: those of their own, and those embedded elsewhere."
+  (seq-filter (lambda (buffer)
+                (eq (buffer-local-value 'major-mode buffer) 'canvas-browser-mode))
+              (buffer-list)))
+
+(defvar canvas-browser--screencast)
+(defvar canvas-browser--focused)
+
+(defun canvas-browser--lose-session ()
+  "Forget the session of this page, but not its target.
+A session belongs to one connection to chromium, and a connection made
+again knows none of the old ones; the target, the page itself, stays
+while chromium runs, and is attached to again."
+  (when canvas-browser--session
+    (canvas-browser-cdp-forget canvas-browser--session))
+  (setq canvas-browser--session nil
+        canvas-browser--screencast nil
+        canvas-browser--focused nil
+        canvas-browser--opening nil))
+
+(defun canvas-browser--reconnect (&optional connect-only except)
+  "Connect to chromium again, and bring back the pages a window shows.
+A chromium that still runs is connected to again and keeps its pages,
+which are attached to again; one that is gone is started anew, and the
+pages are opened afresh.  This is done once for every page, so pages
+that find the connection gone together start one chromium between them.
+A page no window shows comes back when it is next shown or asked.
+With CONNECT-ONLY a chromium that is gone is not started.  EXCEPT, a
+page buffer, is left to whoever is opening it."
+  (let* ((canvas-browser--reconnecting t)
+         (how (canvas-browser-cdp-start connect-only)))
+    (when how
+      (message (if (eq how 'connected)
+                   "canvas-browser: the connection to chromium was lost; connected again"
+                 "canvas-browser: chromium is gone; starting it again"))
+      (dolist (page (canvas-browser--page-buffers))
+        (with-current-buffer page
+          (canvas-browser--lose-session)
+          ;; A new chromium has none of the old pages.
+          (when (eq how 'started)
+            (setq canvas-browser--target nil))))
+      (canvas-browser--watch-targets)
+      (dolist (page (canvas-browser--page-buffers))
+        (when (and (canvas-browser--shown-p page) (not (eq page except)))
+          (with-current-buffer page
+            ;; A buffer whose page is being made has nothing to revive.
+            (when (canvas-browser--page-p)
+              (canvas-browser--revive))))))))
+
+(defun canvas-browser--connect ()
+  "Have chromium connected for this page, which is being opened.
+The other pages are told when the connection is new: each of them holds
+a session no new connection knows.  This page is left out, since it is
+opened by whoever called."
+  (unless (or (canvas-browser-cdp-running-p) canvas-browser--reconnecting)
+    (canvas-browser--reconnect nil (current-buffer))))
+
+(defun canvas-browser--revive ()
+  "Bring this page back after it lost its session.
+Its target is attached to again if chromium still has it, and the page
+stays where it was; otherwise the page is opened afresh at its address."
+  (if canvas-browser--target
+      (canvas-browser--attach nil #'canvas-browser--reopen)
     (canvas-browser--reopen)))
+
+(defun canvas-browser--page-p ()
+  "Whether this buffer is a page that can be opened again.
+It has an address and a size.  Any other buffer has nothing to open,
+and a command of a page run in it must not try."
+  (and (derived-mode-p 'canvas-browser-mode) canvas-browser--url canvas-browser--size t))
+
+(defun canvas-browser--bring-back ()
+  "Have this page answer again, for a command that found no session.
+The connection to chromium is made again when it is gone, and the page
+attached or opened again when it alone lost its session.  The command
+itself is dropped: it was meant for the page as it was."
+  (cond
+   ((not (canvas-browser--page-p))
+    (user-error "canvas-browser: this buffer shows no page"))
+   (canvas-browser--reconnecting nil)
+   ;; The connection comes first: a page that waited for an answer when
+   ;; it went will never have one.
+   ((not (canvas-browser-cdp-running-p))
+    (canvas-browser--reconnect)
+    ;; A page no window shows is not among those brought back.
+    (when (and (canvas-browser-cdp-running-p)
+               (not canvas-browser--session)
+               (not canvas-browser--opening))
+      (canvas-browser--revive)))
+   (canvas-browser--opening nil)
+   (t (canvas-browser--revive))))
+
+(defun canvas-browser--connection-lost ()
+  "Connect to chromium again as soon as the connection is lost.
+Only a chromium that still runs is connected to: one that has gone is
+started again when a page next asks for it, not because it went."
+  (when (and (not canvas-browser--reconnecting)
+             (not (canvas-browser-cdp-running-p))
+             (canvas-browser-cdp-alive-p)
+             (seq-some #'canvas-browser--shown-p (canvas-browser--page-buffers)))
+    ;; Emacs may not have heard yet that a chromium which was killed has
+    ;; gone, and finds out only when its port refuses.
+    (with-demoted-errors "canvas-browser: %S"
+      (canvas-browser--reconnect 'connect-only))))
+
+(add-hook 'canvas-browser-cdp-lost-hook #'canvas-browser--connection-lost)
+
+(defun canvas-browser--session-lost (session)
+  "Bring back the page of SESSION, which chromium no longer knows."
+  (when-let* ((page (seq-find (lambda (buffer)
+                                (equal (buffer-local-value 'canvas-browser--session buffer)
+                                       session))
+                              (canvas-browser--page-buffers))))
+    (with-current-buffer page
+      (canvas-browser--lose-session)
+      (when (canvas-browser--shown-p)
+        (canvas-browser--revive)))))
+
+(add-hook 'canvas-browser-cdp-session-lost-functions #'canvas-browser--session-lost)
 
 (defun canvas-browser--reopen ()
   "Open this buffer's page afresh, at its address and size.
@@ -564,13 +682,12 @@ one to show."
 
 (defun canvas-browser--tell (method params &optional answer)
   "Send METHOD with PARAMS in the session of this buffer.
-ANSWER, when given, is called with chromium's answer.  A chromium that
-died is started again, and a page that chromium has let go of is opened
-afresh; a command without a session reaches no page."
-  (if (or canvas-browser--restarting
-          (and (canvas-browser-cdp-running-p) canvas-browser--session))
+ANSWER, when given, is called with chromium's answer.  A command without
+a session reaches no page: the page is brought back instead, see
+`canvas-browser--bring-back\='."
+  (if (and canvas-browser--session (canvas-browser-cdp-running-p))
       (canvas-browser-cdp-send method params answer canvas-browser--session)
-    (canvas-browser--restart)))
+    (canvas-browser--bring-back)))
 
 (defun canvas-browser--resize (width height &optional then)
   "Lay the page out for WIDTH by HEIGHT pixels, at the zoom of this buffer.
@@ -651,6 +768,13 @@ are killed, and a window change is no reason to start a browser."
                     here)))
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
+        ;; A page that lost its session comes back once it is shown.
+        (when (and (derived-mode-p 'canvas-browser-mode)
+                   (not canvas-browser--session)
+                   (not canvas-browser--opening)
+                   (canvas-browser--page-p)
+                   (canvas-browser--shown-p))
+          (canvas-browser--revive))
         (when (and (derived-mode-p 'canvas-browser-mode) canvas-browser--session)
           (cond
            ;; A window of its own comes first: an embedded page has one
@@ -748,39 +872,48 @@ something is next asked of it."
 (defun canvas-browser--forget-page ()
   "Forget the session of this buffer's page, which is opened afresh when
 something is next asked of it."
-  (canvas-browser-cdp-forget canvas-browser--session)
-  (setq canvas-browser--session nil
-        canvas-browser--target nil
-        canvas-browser--screencast nil))
+  (canvas-browser--lose-session)
+  (setq canvas-browser--target nil))
 
-(defun canvas-browser--attach (&optional url)
+(defun canvas-browser--attach (&optional url otherwise)
   "Attach to this buffer's target, size it, and go to URL.
 Without URL the page stays where it is, as a window another page opened
-does: it was opened at its address."
+does: it was opened at its address.  OTHERWISE, when given, is called in
+this buffer if chromium has no such target; the refusal is then kept
+quiet, since it is looked for."
   (let ((buffer (current-buffer)))
-    (canvas-browser-cdp-send
+    (setq canvas-browser--opening t)
+    (funcall
+     (if otherwise #'canvas-browser-cdp-send-quietly #'canvas-browser-cdp-send)
      "Target.attachToTarget" (list :targetId canvas-browser--target :flatten t)
      (lambda (result)
-       (when-let* ((session (plist-get result :sessionId))
-                   ((buffer-live-p buffer)))
+       (when (buffer-live-p buffer)
          (with-current-buffer buffer
-           (setq canvas-browser--session session)
-           (canvas-browser--listen)
-           (canvas-browser--tell "Page.enable" nil)
-           ;; Chromium's own file dialog opens on a display that
-           ;; nobody sees, so the page hands the choice to Emacs.
-           (canvas-browser--tell "Page.setInterceptFileChooserDialog" (list :enabled t))
-           ;; A page embedded in another buffer leaves the keys to the
-           ;; page you browse.
-           (canvas-browser--awaken (not canvas-browser--host))
-           (canvas-browser--apply-dark)
-           (canvas-browser--fit-shown-window)
-           (canvas-browser--resize (car canvas-browser--size) (cdr canvas-browser--size))
-           (when canvas-browser--host
-             (canvas-browser--watch-fullscreen))
-           (when url
-             (canvas-browser--tell "Page.navigate" (list :url url)))
-           (canvas-browser--start-screencast)))))))
+           (setq canvas-browser--opening nil)
+           (if-let* ((session (plist-get result :sessionId)))
+               (canvas-browser--attached session url)
+             (setq canvas-browser--target nil)
+             (when otherwise (funcall otherwise)))))))))
+
+(defun canvas-browser--attached (session url)
+  "Take SESSION, the new session of this page, and go to URL if there is one."
+  (setq canvas-browser--session session)
+  (canvas-browser--listen)
+  (canvas-browser--tell "Page.enable" nil)
+  ;; Chromium's own file dialog opens on a display that nobody sees, so
+  ;; the page hands the choice to Emacs.
+  (canvas-browser--tell "Page.setInterceptFileChooserDialog" (list :enabled t))
+  ;; A page embedded in another buffer leaves the keys to the page you
+  ;; browse.
+  (canvas-browser--awaken (not canvas-browser--host))
+  (canvas-browser--apply-dark)
+  (canvas-browser--fit-shown-window)
+  (canvas-browser--resize (car canvas-browser--size) (cdr canvas-browser--size))
+  (when canvas-browser--host
+    (canvas-browser--watch-fullscreen))
+  (when url
+    (canvas-browser--tell "Page.navigate" (list :url url)))
+  (canvas-browser--start-screencast))
 
 (defun canvas-browser--fit-shown-window ()
   "Make the canvas the size of the window that shows this page, if one does.
@@ -885,10 +1018,11 @@ it again."
 
 (defun canvas-browser--open (url width height)
   "Open URL in this buffer, on a canvas WIDTH by HEIGHT; URL."
-  (canvas-browser-cdp-start)
+  (canvas-browser--connect)
   (canvas-browser--watch-targets)
   (canvas-browser--adopt width height)
-  (setq canvas-browser--url url)
+  (setq canvas-browser--url url
+        canvas-browser--opening t)
   (let ((buffer (current-buffer)))
     (canvas-browser-cdp-send
      "Target.createTarget"
@@ -899,11 +1033,14 @@ it again."
      (cons :url (cons "about:blank"
                       (canvas-browser-cdp-target-window canvas-browser--host)))
      (lambda (result)
-       (when-let* ((target (plist-get result :targetId))
-                   ((buffer-live-p buffer)))
+       (when (buffer-live-p buffer)
          (with-current-buffer buffer
-           (setq canvas-browser--target target)
-           (canvas-browser--attach url))))))
+           (if-let* ((target (plist-get result :targetId)))
+               (progn
+                 (setq canvas-browser--target target)
+                 (canvas-browser--attach url))
+             ;; A page chromium would not open may be asked again.
+             (setq canvas-browser--opening nil)))))))
   url)
 
 (defvar canvas-browser--chooser)
@@ -2556,7 +2693,9 @@ flush redraws the frame."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (setq canvas-browser--spots-timer nil)
-      (when canvas-browser--session
+      ;; The connection may have gone since the timer was set, and an
+      ;; error of a timer is printed over whatever the reader is doing.
+      (when (and canvas-browser--session (canvas-browser-cdp-running-p))
         (canvas-browser--boxes
          (lambda (boxes)
            (when (buffer-live-p buffer)
@@ -4337,10 +4476,16 @@ shows opens again when it is next shown."
     (dolist (page pages)
       (with-current-buffer page
         (canvas-browser--forget-page)))
+    ;; Chromium is started here, before any page asks: a page that found
+    ;; it gone would bring back every shown page, and say it had gone.
+    (when (seq-some #'canvas-browser--shown-p pages)
+      (canvas-browser-cdp-start)
+      (canvas-browser--watch-targets))
     (dolist (page pages)
       (when (canvas-browser--shown-p page)
         (with-current-buffer page
-          (canvas-browser--reopen))))))
+          (unless (or canvas-browser--session canvas-browser--opening)
+            (canvas-browser--reopen)))))))
 
 ;;;; A page embedded in another buffer
 

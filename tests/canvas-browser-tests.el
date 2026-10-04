@@ -482,19 +482,150 @@ that moment now."
     (setq canvas-browser--insert t)
     (should (string-search "insert" (canvas-browser--header)))))
 
+(defmacro canvas-browser-test--connection-lost (how &rest body)
+  "Run BODY with chromium not connected until it is started again.
+Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
+`started'; the reader's last message is in `said'."
+  (declare (indent 1))
+  `(let ((started 0) (said nil) (running nil))
+     (cl-letf (((symbol-function 'canvas-browser-cdp-running-p) (lambda () running))
+               ((symbol-function 'canvas-browser-cdp-start)
+                (lambda (&optional _connect-only)
+                  (unless running
+                    (cl-incf started)
+                    (setq running t)
+                    ,how)))
+               ((symbol-function 'canvas-browser--shown-p) (lambda (&rest _) t))
+               ((symbol-function 'message)
+                (lambda (format &rest args) (setq said (apply #'format format args)))))
+       ,@body)))
+
 (ert-deftest canvas-browser-a-command-after-chromium-died-starts-it-again ()
   ;; GIVEN a page buffer whose chromium is gone
   ;; WHEN a command is sent
-  ;; THEN chromium is started again, and the reader is told
+  ;; THEN chromium is started again, the reader is told, AND the page is
+  ;;      opened afresh in the new chromium, which has none of the old
+  ;;      pages, rather than the command being sent in a session no
+  ;;      chromium knows
   (canvas-browser-test--in-page
-    (let ((started nil) (said nil))
-      (cl-letf (((symbol-function 'canvas-browser-cdp-running-p) (lambda () nil))
-                ((symbol-function 'canvas-browser-cdp-start) (lambda () (setq started t)))
-                ((symbol-function 'message)
-                 (lambda (format &rest args) (setq said (apply #'format format args)))))
+    (canvas-browser-test--connection-lost 'started
+      (setq canvas-browser-test--commands nil)
+      (canvas-browser-refresh)
+      (should (= started 1))
+      (should (string-search "chromium is gone" said))
+      (should (assoc "Target.createTarget" canvas-browser-test--commands))
+      (should-not (assoc "Page.reload" canvas-browser-test--commands)))))
+
+(ert-deftest canvas-browser-a-chromium-that-still-runs-keeps-its-pages ()
+  ;; GIVEN a page buffer whose websocket closed while chromium went on
+  ;; WHEN a command is sent
+  ;; THEN Emacs connects to that chromium again, AND attaches to the page
+  ;;      it already has, which stays where it was, rather than opening it
+  ;;      afresh, AND the old session is forgotten for the new one
+  (canvas-browser-test--in-page
+    (setq canvas-browser--session "OLD")
+    (canvas-browser-test--connection-lost 'connected
+      (setq canvas-browser-test--commands nil)
+      (canvas-browser-refresh)
+      (should (= started 1))
+      (should (string-search "connected again" said))
+      (should (equal (canvas-browser-test--params "Target.attachToTarget")
+                     '(:targetId "T1" :flatten t)))
+      (should-not (assoc "Target.createTarget" canvas-browser-test--commands))
+      (should-not (assoc "Page.navigate" canvas-browser-test--commands))
+      (should (equal canvas-browser--session "S1")))))
+
+(ert-deftest canvas-browser-pages-that-lose-chromium-together-start-it-once ()
+  ;; GIVEN two pages whose connection to chromium is gone
+  ;; WHEN each of them is asked for something, the second while chromium
+  ;;      is still being started for the first, as a timer may ask
+  ;; THEN chromium is started once, AND both pages come back
+  (canvas-browser-test--with-chromium
+    (let ((one (generate-new-buffer "one"))
+          (two (generate-new-buffer "two")))
+      (unwind-protect
+          (progn
+            (dolist (page (list one two))
+              (with-current-buffer page
+                (canvas-browser-mode)
+                (canvas-browser--open "https://example.org" 800 600)))
+            (let ((started 0) (running nil))
+              (cl-letf (((symbol-function 'canvas-browser-cdp-running-p) (lambda () running))
+                        ((symbol-function 'canvas-browser-cdp-start)
+                         (lambda (&optional _connect-only)
+                           (unless running
+                             (cl-incf started)
+                             (with-current-buffer two (canvas-browser-refresh))
+                             (setq running t)
+                             'connected)))
+                        ((symbol-function 'canvas-browser--shown-p) (lambda (&rest _) t))
+                        ((symbol-function 'message) #'ignore))
+                (with-current-buffer one (canvas-browser-refresh))
+                (with-current-buffer two (canvas-browser-refresh))
+                (should (= started 1))
+                (should (buffer-local-value 'canvas-browser--session one))
+                (should (buffer-local-value 'canvas-browser--session two)))))
+        (kill-buffer one)
+        (kill-buffer two)))))
+
+(ert-deftest canvas-browser-a-page-that-waited-when-chromium-went-comes-back ()
+  ;; GIVEN a page that waited for chromium to answer that it is attached,
+  ;;       AND the connection went before the answer came
+  ;; WHEN something is asked of it
+  ;; THEN chromium is connected to again: the answer it waited for will
+  ;;      never come, and the page would else wait for good
+  (canvas-browser-test--in-page
+    (setq canvas-browser--session nil
+          canvas-browser--opening t)
+    (canvas-browser-test--connection-lost 'connected
+      (canvas-browser-refresh)
+      (should (= started 1))
+      (should (equal canvas-browser--session "S1")))))
+
+(ert-deftest canvas-browser-a-new-page-while-chromium-is-away-opens-once ()
+  ;; GIVEN a page that a window shows, whose websocket closed while
+  ;;       chromium went on
+  ;; WHEN a new page is opened, as `canvas-browser\=' does
+  ;; THEN chromium is connected to once, the new page is opened once, AND
+  ;;      the old page is attached again to the page chromium still has
+  (canvas-browser-test--with-chromium
+    (let ((old (generate-new-buffer " *old*"))
+          (new (generate-new-buffer " *new*")))
+      (unwind-protect
+          (progn
+            (with-current-buffer old
+              (canvas-browser-mode)
+              (canvas-browser--open "https://example.org" 800 600))
+            (setq canvas-browser-test--commands nil)
+            (canvas-browser-test--connection-lost 'connected
+              (with-current-buffer new
+                (canvas-browser-mode)
+                (canvas-browser--open "https://example.com" 800 600))
+              (should (= started 1)))
+            (should (equal 1 (cl-count "Target.createTarget" canvas-browser-test--commands
+                                       :key #'car :test #'equal)))
+            (should (equal 2 (cl-count "Target.attachToTarget" canvas-browser-test--commands
+                                       :key #'car :test #'equal)))
+            (should (buffer-local-value 'canvas-browser--session old))
+            (should (buffer-local-value 'canvas-browser--session new)))
+        (kill-buffer old)
+        (kill-buffer new)))))
+
+(ert-deftest canvas-browser-a-page-is-not-opened-twice-while-it-opens ()
+  ;; GIVEN a page that waits for chromium to answer that it is attached
+  ;; WHEN something is asked of it meanwhile, as the windows changing do
+  ;; THEN nothing is sent and the page is not opened a second time: that
+  ;;      would leave a window of chromium behind for nobody
+  (canvas-browser-test--with-chromium
+    (with-temp-buffer
+      (canvas-browser-mode)
+      (cl-letf (((symbol-function 'canvas-browser-cdp-send)
+                 (lambda (method params &optional _answer _session)
+                   (push (cons method params) canvas-browser-test--commands))))
+        (canvas-browser--open "https://example.org" 800 600)
+        (setq canvas-browser-test--commands nil)
         (canvas-browser-refresh)
-        (should started)
-        (should (string-search "chromium" said))))))
+        (should-not canvas-browser-test--commands)))))
 
 (ert-deftest canvas-browser-a-frame-that-cannot-be-read-keeps-the-last-one ()
   ;; GIVEN a page buffer and a frame that the picture reader refuses
@@ -1465,8 +1596,8 @@ that moment now."
   ;;      no reason to open a browser
   (canvas-browser-test--in-page
     (cl-letf (((symbol-function 'canvas-browser-cdp-running-p) (lambda () nil))
-              ((symbol-function 'canvas-browser--restart)
-               (lambda () (error "canvas-browser: started again for a window change"))))
+              ((symbol-function 'canvas-browser-cdp-start)
+               (lambda (&rest _) (error "canvas-browser: started again for a window change"))))
       (setq canvas-browser-test--commands nil)
       (canvas-browser--follow-windows)
       (should-not canvas-browser-test--commands))))
@@ -1518,14 +1649,61 @@ that moment now."
   ;; THEN the page is opened again rather than sent to, since a command
   ;;      without a session reaches no page at all
   (canvas-browser-test--in-page
-    (setq canvas-browser--session nil
+    (canvas-browser--detached '(:reason "target_closed"))
+    (setq canvas-browser-test--commands nil)
+    (canvas-browser--tell "Page.reload" nil)
+    (should (assoc "Target.createTarget" canvas-browser-test--commands))
+    (should-not (assoc "Page.reload" canvas-browser-test--commands))
+    (should (equal canvas-browser--session "S1"))))
+
+(ert-deftest canvas-browser-a-session-chromium-forgot-is-attached-again ()
+  ;; GIVEN a page whose session chromium no longer knows, which it says
+  ;;       by answering a command with "Session with given id not found"
+  ;; WHEN that is heard
+  ;; THEN the page attaches to its target again, AND it gets a new session
+  ;;      rather than failing at every command after
+  (canvas-browser-test--in-page
+    (setq canvas-browser--session "GONE"
           canvas-browser-test--commands nil)
-    (let ((opened nil))
-      (cl-letf (((symbol-function 'canvas-browser--restart)
-                 (lambda () (setq opened t))))
-        (canvas-browser--tell "Page.reload" nil)
-        (should opened)
-        (should-not canvas-browser-test--commands)))))
+    (cl-letf (((symbol-function 'canvas-browser--shown-p) (lambda (&rest _) t)))
+      (run-hook-with-args 'canvas-browser-cdp-session-lost-functions "GONE"))
+    (should (equal (canvas-browser-test--params "Target.attachToTarget")
+                   '(:targetId "T1" :flatten t)))
+    (should (equal canvas-browser--session "S1"))))
+
+(ert-deftest canvas-browser-a-page-whose-target-is-gone-is-opened-afresh ()
+  ;; GIVEN a page that lost its session, AND whose target chromium no
+  ;;       longer has
+  ;; WHEN it is brought back
+  ;; THEN attaching to the old target is refused, AND the page is opened
+  ;;      afresh at its address
+  (canvas-browser-test--in-page
+    (canvas-browser--lose-session)
+    (setq canvas-browser-test--commands nil)
+    (cl-letf (((symbol-function 'canvas-browser-cdp-send)
+               (lambda (method params &optional answer _session)
+                 (push (cons method params) canvas-browser-test--commands)
+                 (when answer
+                   (funcall answer (unless (equal (plist-get params :targetId) "T1")
+                                     '(:targetId "T2" :sessionId "S2")))))))
+      (canvas-browser--revive))
+    (should (assoc "Target.createTarget" canvas-browser-test--commands))
+    (should (equal canvas-browser--target "T2"))
+    (should (equal canvas-browser--session "S2"))))
+
+(ert-deftest canvas-browser-a-command-of-a-page-elsewhere-opens-nothing ()
+  ;; GIVEN a buffer that is no page
+  ;; WHEN a command of a page is run in it
+  ;; THEN it is a user error, AND nothing is started or opened: the buffer
+  ;;      has no address or size to open, and opening it signalled a type
+  ;;      error for every turn of the wheel
+  (canvas-browser-test--with-chromium
+    (with-temp-buffer
+      (let ((started nil))
+        (cl-letf (((symbol-function 'canvas-browser-cdp-start) (lambda (&rest _) (setq started t))))
+          (should-error (canvas-browser--tell "Input.dispatchMouseEvent" nil) :type 'user-error)
+          (should-not started)
+          (should-not canvas-browser-test--commands))))))
 
 (ert-deftest canvas-browser-the-hints-are-drawn-on-the-canvas ()
   ;; GIVEN a page buffer and one box that can be clicked
@@ -4126,6 +4304,45 @@ file that names the zip, into the directory it is given."
                                        :key #'car :test #'equal))))
         (kill-buffer shown)
         (kill-buffer hidden)))))
+
+(ert-deftest canvas-browser-restart-chromium-opens-each-shown-page-once ()
+  ;; GIVEN two pages that windows show
+  ;; WHEN chromium is restarted, so that it is really gone for a moment
+  ;; THEN one chromium is started, AND each page is opened once in it: a
+  ;;      page opened twice leaves a window of chromium behind for nobody,
+  ;;      AND the reader is not told that chromium is gone, which it is
+  ;;      only because the reader asked
+  (canvas-browser-test--with-chromium
+    (let ((one (generate-new-buffer " *one*"))
+          (two (generate-new-buffer " *two*")))
+      (unwind-protect
+          (progn
+            (dolist (buffer (list one two))
+              (with-current-buffer buffer
+                (canvas-browser-mode)
+                (canvas-browser--open "https://example.org" 800 600)))
+            (setq canvas-browser-test--commands nil)
+            (let ((running t) (started 0) (said nil))
+              (cl-letf (((symbol-function 'canvas-browser-cdp-running-p) (lambda () running))
+                        ((symbol-function 'canvas-browser-cdp-stop) (lambda () (setq running nil)))
+                        ((symbol-function 'canvas-browser-cdp-start)
+                         (lambda (&optional _connect-only)
+                           (unless running
+                             (cl-incf started)
+                             (setq running t)
+                             'started)))
+                        ((symbol-function 'canvas-browser--shown-p) (lambda (&rest _) t))
+                        ((symbol-function 'message)
+                         (lambda (format &rest args) (push (apply #'format format args) said))))
+                (canvas-browser-restart-chromium)
+                (should (= started 1))
+                (should-not (seq-some (lambda (text) (string-search "is gone" text)) said))))
+            (should (equal 2 (cl-count "Target.createTarget" canvas-browser-test--commands
+                                       :key #'car :test #'equal)))
+            (should (buffer-local-value 'canvas-browser--session one))
+            (should (buffer-local-value 'canvas-browser--session two)))
+        (kill-buffer one)
+        (kill-buffer two)))))
 
 (ert-deftest canvas-browser-restart-chromium-shows-an-embedded-page-in-its-host ()
   ;; GIVEN a page embedded in a host buffer that a window shows
