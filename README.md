@@ -235,6 +235,17 @@ package may have taken `ESC`. The header line says `insert` while it
 lasts. A field inside a web component, as on the login page of Reddit,
 counts as a field: the focus is followed into the component.
 
+The input method of macOS works in insert state, so Japanese and other
+languages it writes can be typed into the page. The buffer is writable
+while insert state lasts, since the input method gives the keys of a
+read-only buffer straight to Emacs; the picture itself stays read-only,
+so a key of Emacs that edits a buffer cannot change it. With the
+[inline patch](https://github.com/takaxp/ns-inline-patch) of the input
+method, the text you are still converting shows in the field of the
+page, underlined as in any browser, instead of at the point of the
+buffer, which is out of sight past the picture. Its list of candidates
+still opens at the top right of the window, where Emacs has its cursor.
+
 A hint goes only where a click in the middle of what shows of a thing
 reaches it, or reaches its label. Whatever lies outside the window,
 under a dialog, or around something else that can be clicked, as a link

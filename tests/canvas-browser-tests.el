@@ -218,6 +218,141 @@ that moment now."
     (canvas-browser-normal-mode)
     (should-not canvas-browser--insert)))
 
+;;;; The input method of macOS
+
+(defvar ns-working-text)
+
+(ert-deftest canvas-browser-insert-state-leaves-the-buffer-writable-but-not-the-picture ()
+  ;; GIVEN a page buffer, which is read-only as a special buffer is
+  ;; WHEN it enters insert state, and leaves it
+  ;; THEN the buffer is writable in insert state, so that the input method
+  ;;      of macOS gets the keys, but no key of Emacs can delete the
+  ;;      picture or put text at either side of it; AND the buffer is
+  ;;      read-only again after
+  (canvas-browser-test--in-page
+    (should buffer-read-only)
+    (canvas-browser-insert-mode)
+    (should-not buffer-read-only)
+    (goto-char (point-max))
+    (should-error (insert "x") :type 'text-read-only)
+    (should-error (delete-char -1) :type 'text-read-only)
+    (goto-char (point-min))
+    (should-error (insert "x") :type 'text-read-only)
+    (should-error (delete-char 1) :type 'text-read-only)
+    (should (equal (buffer-string) "#"))
+    (canvas-browser-normal-mode)
+    (should buffer-read-only)))
+
+(ert-deftest canvas-browser-a-new-canvas-keeps-the-picture-read-only ()
+  ;; GIVEN a page buffer in insert state
+  ;; WHEN the window changes size, and the page gets a new canvas
+  ;; THEN the new picture is read-only too
+  (canvas-browser-test--in-page
+    (canvas-browser-insert-mode)
+    (canvas-browser--adopt 500 400)
+    (should-not buffer-read-only)
+    (should (get-text-property (point-min) 'read-only))
+    (goto-char (point-max))
+    (should-error (insert "x") :type 'text-read-only)))
+
+(ert-deftest canvas-browser-the-text-being-composed-goes-to-the-page ()
+  ;; GIVEN a page buffer in insert state
+  ;; WHEN the input method marks 2 of the 3 characters of its text as
+  ;;      the part being converted
+  ;; THEN the page is given the text as a composition with that part
+  ;;      selected, AND no overlay is drawn at point
+  (canvas-browser-test--in-page
+    (canvas-browser-insert-mode)
+    (let ((ns-working-text "にほん")
+          (drawn nil))
+      (canvas-browser--ime-marked-text (lambda (&rest _) (setq drawn t)) 1 2)
+      (should-not drawn))
+    (let ((params (canvas-browser-test--params "Input.imeSetComposition")))
+      (should (equal (plist-get params :text) "にほん"))
+      (should (equal (plist-get params :selectionStart) 1))
+      (should (equal (plist-get params :selectionEnd) 3)))
+    (should canvas-browser--composing)))
+
+(ert-deftest canvas-browser-the-caret-of-a-composition-ends-the-text ()
+  ;; GIVEN a page buffer in insert state
+  ;; WHEN the input method hands working text with no part marked
+  ;; THEN the composition's caret is at its end, counted as JavaScript
+  ;;      counts, in which an emoji is two
+  (canvas-browser-test--in-page
+    (canvas-browser-insert-mode)
+    (let ((ns-working-text "あ😀"))
+      (canvas-browser--ime-working-text (lambda () (error "Drawn at point"))))
+    (let ((params (canvas-browser-test--params "Input.imeSetComposition")))
+      (should (equal (plist-get params :selectionStart) 3))
+      (should (equal (plist-get params :selectionEnd) 3)))))
+
+(ert-deftest canvas-browser-committed-text-is-typed-once ()
+  ;; GIVEN a page buffer in insert state whose page shows a composition
+  ;; WHEN the input method commits it: it takes the working text away,
+  ;;      and then types the text as keys
+  ;; THEN the composition is emptied before the first key, so that the
+  ;;      field holds the text once
+  (canvas-browser-test--in-page
+    (canvas-browser-insert-mode)
+    (let ((ns-working-text "日本"))
+      (canvas-browser--ime-marked-text #'ignore 2 0))
+    (setq canvas-browser-test--commands nil)
+    (canvas-browser--ime-unput)
+    (let ((last-command-event ?日))
+      (canvas-browser-self-insert))
+    (let ((sent (reverse canvas-browser-test--commands)))
+      (should (equal (car (car sent)) "Input.imeSetComposition"))
+      (should (equal (plist-get (cdr (car sent)) :text) ""))
+      (should (equal (car (cadr sent)) "Input.dispatchKeyEvent")))
+    (should-not canvas-browser--composing)))
+
+(ert-deftest canvas-browser-an-input-method-elsewhere-is-left-alone ()
+  ;; GIVEN a page buffer in normal state, and a buffer of text
+  ;; WHEN the input method hands text in either, or takes it away
+  ;; THEN the function that draws it at point is called, AND the page is
+  ;;      sent nothing
+  (canvas-browser-test--in-page
+    (let ((ns-working-text "か")
+          (drawn 0))
+      (canvas-browser--ime-marked-text (lambda (&rest _) (cl-incf drawn)) 0 1)
+      (with-temp-buffer
+        (canvas-browser--ime-marked-text (lambda (&rest _) (cl-incf drawn)) 0 1)
+        (canvas-browser--ime-working-text (lambda () (cl-incf drawn)))
+        (canvas-browser--ime-unput))
+      (canvas-browser--ime-unput)
+      (should (= drawn 3)))
+    (should-not (canvas-browser-test--sent-p "Input.imeSetComposition"))))
+
+(ert-deftest canvas-browser-leaving-insert-state-ends-the-composition ()
+  ;; GIVEN a page buffer in insert state whose page shows a composition
+  ;; WHEN insert state is left
+  ;; THEN the composition is taken out of the field
+  (canvas-browser-test--in-page
+    (canvas-browser-insert-mode)
+    (let ((ns-working-text "か"))
+      (canvas-browser--ime-working-text #'ignore))
+    (canvas-browser-normal-mode)
+    (should (equal (plist-get (canvas-browser-test--params "Input.imeSetComposition") :text) ""))
+    (should-not canvas-browser--composing)))
+
+(ert-deftest canvas-browser-only-the-input-method-patch-is-advised ()
+  ;; GIVEN an Emacs with the inline patch of the input method, and one
+  ;;      without it, such as one on GNU/Linux
+  ;; WHEN the page buffer watches the input method
+  ;; THEN the three functions of the patch are advised in the first, AND
+  ;;      nothing in the second
+  (let ((patched '(ns-insert-marked-text ns-insert-working-text ns-unput-working-text))
+        (advised nil))
+    (cl-letf (((symbol-function 'advice-add)
+               (lambda (symbol &rest _) (push symbol advised))))
+      (cl-letf (((symbol-function 'fboundp) (lambda (symbol) (memq symbol patched))))
+        (canvas-browser--watch-input-method))
+      (should (equal (sort advised #'string<) (sort (copy-sequence patched) #'string<)))
+      (setq advised nil)
+      (cl-letf (((symbol-function 'fboundp) #'ignore))
+        (canvas-browser--watch-input-method))
+      (should-not advised))))
+
 (ert-deftest canvas-browser-scrolling-moves-the-page-a-screen ()
   ;; GIVEN a page buffer in normal state, 800 by 600
   ;; WHEN the page is scrolled down and then up

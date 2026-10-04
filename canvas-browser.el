@@ -116,7 +116,12 @@ which the next window change makes right."
   (let ((inhibit-read-only t))
     (erase-buffer)
     ;; `propertize' keeps the spec `eq': the canvas is keyed on it.
-    (insert (propertize "#" 'display canvas-browser--canvas))))
+    (insert (propertize "#" 'display canvas-browser--canvas
+                        ;; Insert state leaves the buffer writable, for
+                        ;; the input method's sake; the picture is kept
+                        ;; from the keys of Emacs that edit a buffer, at
+                        ;; either side of it.
+                        'read-only t 'front-sticky '(read-only)))))
 
 (defvar-local canvas-browser--number nil
   "What tells this page's files from the files of every other page.")
@@ -3190,9 +3195,13 @@ here, on every load."
   (eww canvas-browser--url))
 
 (defun canvas-browser-insert-mode ()
-  "Send every key to the page until `ESC'."
+  "Send every key to the page until `ESC'.
+The buffer is writable meanwhile: the input method of macOS hands the
+keys of a read-only buffer to Emacs one by one, so Japanese could not be
+typed into the page.  The picture itself stays read-only."
   (interactive)
-  (setq canvas-browser--insert t)
+  (setq canvas-browser--insert t
+        buffer-read-only nil)
   (use-local-map canvas-browser-insert-map)
   (canvas-browser--keep-modal-state)
   (message "canvas-browser: what you type goes to the page; ESC or C-g stops"))
@@ -3216,11 +3225,92 @@ meow's keypad rather than the menu of the page."
 (defun canvas-browser-normal-mode ()
   "Keep the keys of Emacs again."
   (interactive)
+  (canvas-browser--stop-composing)
   (setq canvas-browser--insert nil
-        canvas-browser--field-mark nil)
+        canvas-browser--field-mark nil
+        buffer-read-only t)
   (use-local-map canvas-browser-mode-map)
   (canvas-browser--keep-modal-state)
   (message "canvas-browser: the keys are Emacs's again"))
+
+;;;; The input method of macOS
+
+;; The NS port with the inline patch of macOS's input method draws the
+;; text being composed at point, and point is past the picture, out of
+;; sight.  In insert state the text goes to the field of the page
+;; instead, which shows it underlined, as a browser does.
+
+(defvar ns-working-text)
+
+(defvar-local canvas-browser--composing nil
+  "Whether the page shows text the input method has not committed yet.")
+
+(defun canvas-browser--composing-here-p ()
+  "Whether text being composed in this buffer belongs to the page."
+  (and (derived-mode-p 'canvas-browser-mode) canvas-browser--insert))
+
+(defun canvas-browser--utf16-length (text)
+  "The length of TEXT as JavaScript counts it, in UTF-16 units.
+DevTools places the caret of a composition by that count, which is
+more than the count of characters for a character outside the BMP."
+  (/ (string-bytes (encode-coding-string text 'utf-16le)) 2))
+
+(defun canvas-browser--compose (text from to)
+  "Show TEXT in the field of the page as text being composed.
+FROM and TO, counted in characters, mark the part the input method is
+converting, or the caret when they are equal."
+  (setq canvas-browser--composing (not (string-empty-p text)))
+  (canvas-browser--tell
+   "Input.imeSetComposition"
+   (list :text text
+         :selectionStart (canvas-browser--utf16-length (substring text 0 from))
+         :selectionEnd (canvas-browser--utf16-length (substring text 0 to)))))
+
+(defun canvas-browser--stop-composing ()
+  "Take the text being composed out of the field, if there is any.
+The input method types the text it commits as keys, after this: with
+the composition still there, the field would hold the text twice."
+  (when canvas-browser--composing
+    (canvas-browser--compose "" 0 0)))
+
+(defun canvas-browser--ime-marked-text (insert from length)
+  "Compose `ns-working-text' in the page, or call INSERT with FROM and LENGTH.
+This goes around `ns-insert-marked-text', which shows the text in an
+overlay; FROM and LENGTH mark the part being converted."
+  (if (canvas-browser--composing-here-p)
+      (let ((to (+ from length)))
+        (when (<= to (length ns-working-text))
+          (canvas-browser--compose ns-working-text from to)))
+    (funcall insert from length)))
+
+(defun canvas-browser--ime-working-text (insert)
+  "Compose `ns-working-text' in the page, or call INSERT.
+This goes around `ns-insert-working-text', which shows the text in an
+overlay; the caret goes at the end of the text."
+  (if (canvas-browser--composing-here-p)
+      (let ((end (length ns-working-text)))
+        (canvas-browser--compose ns-working-text end end))
+    (funcall insert)))
+
+(defun canvas-browser--ime-unput (&rest _)
+  "Take the text being composed out of the page, when this is a page buffer.
+This runs before `ns-unput-working-text', which the input method calls
+when the text is committed or given up."
+  (when (derived-mode-p 'canvas-browser-mode)
+    (canvas-browser--stop-composing)))
+
+(defun canvas-browser--watch-input-method ()
+  "Have the input method of macOS compose in the page rather than at point.
+An Emacs without the inline patch of the input method has none of
+these functions, and is left as it is."
+  (when (fboundp 'ns-insert-marked-text)
+    (advice-add 'ns-insert-marked-text :around #'canvas-browser--ime-marked-text))
+  (when (fboundp 'ns-insert-working-text)
+    (advice-add 'ns-insert-working-text :around #'canvas-browser--ime-working-text))
+  (when (fboundp 'ns-unput-working-text)
+    (advice-add 'ns-unput-working-text :before #'canvas-browser--ime-unput)))
+
+(with-eval-after-load 'ns-win (canvas-browser--watch-input-method))
 
 (defun canvas-browser--bind-clicks (map click)
   "Bind the clicks of the mouse in MAP to CLICK, a command.
