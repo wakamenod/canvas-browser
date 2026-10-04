@@ -49,7 +49,8 @@ part of it to copy a picture, and shows a page inside another buffer.
 - Chromium. On Ubuntu that is `sudo snap install chromium`. On macOS,
   Google Chrome or Chromium in `/Applications` is found as it is.
 - `Xvfb`, the X server that chromium draws on, out of sight. On Ubuntu
-  that is `sudo apt install xvfb`. macOS needs none: see
+  that is `sudo apt install xvfb`. macOS needs none, but a small
+  program of canvas-browser instead, which you build: see
   [On macOS](#on-macos).
 
 A snap writes only outside the hidden directories of your home, so the
@@ -78,6 +79,7 @@ git clone https://github.com/Daskeladden/canvas-keys.git
 git clone https://github.com/Daskeladden/canvas-diagram.git
 git clone https://github.com/Daskeladden/canvas-browser.git
 make -C canvas-diagram        # builds canvas-cairo.so
+make -C canvas-browser display  # on macOS: builds canvas-browser-display
 ```
 
 Install `websocket` from an archive, with `M-x package-install`. Then
@@ -510,37 +512,51 @@ cost two whole cores.
 `canvas-browser-window-strategy` says how chromium gets its window:
 `xvfb`, the default on Linux, is the display of its own above;
 `headless` is no window at all, for a machine with no X server; and
-`offscreen`, the default on macOS, is below. `canvas-browser-headless`,
-the older setting, still means `headless` while the strategy is left at
-its default.
+`virtual-display`, the default on macOS, and `offscreen` are below.
+`canvas-browser-headless`, the older setting, still means `headless`
+while the strategy is left at its default.
 
 ### On macOS
 
 Chromium on macOS draws on no X display, so `Xvfb` cannot hide it.
-Instead, each page opens in a window of its own, made past the
-bottom right corner of your screen. This is the default on macOS, so
-nothing needs to be set.
+macOS can make a display of its own instead, one that no screen shows,
+and chromium draws its windows there. `canvas-browser-display` makes
+that display. It is a program of a hundred lines in Swift, which you build
+next to canvas-browser with the Swift of the Xcode command line tools:
 
-macOS keeps a part of every window on the screen, so a corner of about
-40 pixels shows there. It is out of sight behind any window that covers
-the corner, such as a large Emacs frame, and the page goes on drawing
-behind it. The sites see the same Chrome as with a window on `Xvfb`,
-with the WebGL of the graphics card.
+    make display
 
-A window a page opens, such as one to sign in, opens where chromium
-likes and is moved to the corner as soon as chromium tells of it, a few
-hundredths of a second later. Chrome comes to the front with each window
-it opens, and Emacs takes the focus back.
+The display touches your main display at its bottom right corner and
+nowhere else, and each page opens in a window of its own on it, so
+nothing of chromium comes into view, not even a window a page opens to
+sign in. The sites see the same Chrome as with a window on `Xvfb`, with
+the WebGL of the graphics card. The display lasts as long as the
+program; Emacs starts it with chromium and stops it after chromium, and
+when the program ends by itself chromium is stopped too, since macOS
+would move its windows onto your screen. The program uses classes of
+macOS that are not public, as DeskPad does, so a macOS to come may
+break it.
+
+Without the program, or when it fails, canvas-browser says why, once,
+and uses `offscreen`: each window goes past the bottom right corner of
+your screen. macOS keeps a part of every window on the screen, so a
+corner of about 40 pixels shows there; it is out of sight behind any
+window that covers the corner, such as a large Emacs frame, and the page
+goes on drawing behind it. A window a page opens shows where chromium
+puts it for a few hundredths of a second before it goes to the corner.
+Set the strategy to `offscreen` to have this without the program.
 
 A window that is minimized, or whose application is hidden, would show
-nothing at all, but a page loaded into it draws nothing either: macOS
-tells chromium that the window is not visible. So the windows stay in
-the corner.
+nothing, but a page loaded into it draws nothing either: macOS tells
+chromium that the window is not visible. So neither is used.
 
-Chrome is in the Dock and in `Cmd-Tab` while it runs. A tiling window
-manager such as Amethyst moves windows on its own: leave this Chrome out
-of it. Using Chromium or Chrome for Testing here keeps it apart from the
-Chrome you browse with.
+Chrome comes to the front with each window it opens, wherever the
+window is, and Emacs takes the focus back at once. Chrome is in the Dock
+and in `Cmd-Tab` while it runs. A tiling window manager such as Amethyst
+arranges the windows on the virtual display too, where nobody sees
+them, so it does no harm there; with `offscreen` it may pull the
+windows into view, so leave this Chrome out of it. Using Chromium or
+Chrome for Testing here keeps it apart from the Chrome you browse with.
 
 ## Settings
 
@@ -549,7 +565,8 @@ Chrome you browse with.
 | `canvas-browser-chromium` | chromium, chromium-browser, google-chrome, and the apps of Chromium and Google Chrome on macOS | the names looked for |
 | `canvas-browser-profile-directory` | by the chromium found | where the profile goes |
 | `canvas-browser-cdp-timeout` | 10 | seconds to wait for chromium |
-| `canvas-browser-window-strategy` | offscreen on macOS, else xvfb | how chromium gets its window: xvfb, headless or offscreen |
+| `canvas-browser-window-strategy` | virtual-display on macOS, else xvfb | how chromium gets its window: xvfb, headless, virtual-display or offscreen |
+| `canvas-browser-virtual-display-program` | canvas-browser-display, next to canvas-browser | the program that makes the virtual display |
 | `canvas-browser-headless` | nil | the older way to say headless |
 | `canvas-browser-display` | :98 | the X display chromium draws its window on |
 | `canvas-browser-quality` | 70 | the quality of a moving frame, from 1 to 100 |

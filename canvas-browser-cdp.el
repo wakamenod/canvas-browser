@@ -250,8 +250,8 @@ that one instead."
   :group 'canvas-browser)
 
 (defun canvas-browser-cdp--default-window-strategy ()
-  "The window strategy of this system: `offscreen\=' on macOS, else `xvfb\='."
-  (if (eq system-type 'darwin) 'offscreen 'xvfb))
+  "The window strategy of this system: `virtual-display\=' on macOS, else `xvfb\='."
+  (if (eq system-type 'darwin) 'virtual-display 'xvfb))
 
 (defcustom canvas-browser-window-strategy (canvas-browser-cdp--default-window-strategy)
   "How chromium gets a window that nobody looks at.
@@ -259,27 +259,62 @@ that one instead."
 where `Xvfb\=' is started.  This needs an X server, so it is for Linux.
 `headless\=': no window at all.  Sites behind a bot check can tell; see
 `canvas-browser-headless\='.
-`offscreen\=': a window on your own screen, pushed past its corner, and so
-is every window a page opens later.  This is for macOS, where chromium
-draws on no X display.  macOS keeps a corner of each window on the
-screen, and a window behind Emacs is out of sight.
-The default is `offscreen\=' on macOS and `xvfb\=' elsewhere.  While this
-is left at its default, a non-nil `canvas-browser-headless\=' means
-`headless\='."
+`virtual-display\=': a window on a display of macOS that nobody sees,
+made by `canvas-browser-virtual-display-program\=' and put past the
+corner of your main display.  This is for macOS, where chromium draws
+on no X display.  Without the program it is `offscreen\='.
+`offscreen\=': a window on your own screen, pushed past its corner.
+macOS keeps a corner of each window on the screen, and a window behind
+Emacs is out of sight.
+Every window a page opens later goes where the first one went.
+The default is `virtual-display\=' on macOS and `xvfb\=' elsewhere.
+While this is left at its default, a non-nil `canvas-browser-headless\='
+means `headless\='."
   :type '(choice (const :tag "A window on an X display of its own" xvfb)
                  (const :tag "No window" headless)
+                 (const :tag "A window on a display nobody sees" virtual-display)
                  (const :tag "A window past the corner of your screen" offscreen))
   :group 'canvas-browser)
+
+(defconst canvas-browser-cdp--directory
+  (file-name-directory (or load-file-name buffer-file-name default-directory))
+  "The directory canvas-browser is loaded from.")
+
+(defcustom canvas-browser-virtual-display-program
+  (expand-file-name "canvas-browser-display" canvas-browser-cdp--directory)
+  "The program that makes the display nobody sees, on macOS.
+`make display\=' builds it from canvas-browser-display.swift, next to
+this file.  It prints where the display is and keeps it until it ends."
+  :type 'file
+  :group 'canvas-browser)
+
+(defvar canvas-browser-cdp--fallback nil
+  "Why the virtual display did not start, or nil.
+Windows go past the corner of the screen instead, until chromium is
+started again.")
+
+(defvar canvas-browser-cdp--fallback-told nil
+  "Whether the reader has heard why the virtual display did not start.")
 
 (defun canvas-browser-cdp-window-strategy ()
   "The way chromium gets its window, from the settings.
 `canvas-browser-headless\=' came first, so a setting of it still counts
-until the new setting is changed from its default."
-  (if (and canvas-browser-headless
-           (eq canvas-browser-window-strategy
-               (canvas-browser-cdp--default-window-strategy)))
-      'headless
-    canvas-browser-window-strategy))
+until the new setting is changed from its default.  A virtual display
+that did not start leaves the windows off screen instead."
+  (let ((strategy (if (and canvas-browser-headless
+                           (eq canvas-browser-window-strategy
+                               (canvas-browser-cdp--default-window-strategy)))
+                      'headless
+                    canvas-browser-window-strategy)))
+    (if (and (eq strategy 'virtual-display) canvas-browser-cdp--fallback)
+        'offscreen
+      strategy)))
+
+(defun canvas-browser-cdp--hidden-p ()
+  "Whether the windows of chromium are on your own screen, kept out of sight.
+On macOS a display nobody sees is still one of your screens: chromium
+comes to the front with each window it opens there."
+  (memq (canvas-browser-cdp-window-strategy) '(virtual-display offscreen)))
 
 (defconst canvas-browser-cdp--offscreen '(:left 20000 :top 20000 :width 100 :height 100)
   "Where a window goes to be out of sight, as far as chromium lets it.
@@ -289,29 +324,40 @@ A window that is minimized, or whose application is hidden, would show
 nothing, but a page loaded into it draws nothing either and sends no
 frame: macOS tells chromium it is not visible.")
 
+(defvar canvas-browser-cdp--virtual-display nil
+  "Where the virtual display is, as (:left :top :width :height), or nil.")
+
+(defun canvas-browser-cdp--hidden-bounds ()
+  "Where a window goes to be out of sight, as bounds of chromium.
+That is the whole virtual display, or else past the corner of the screen."
+  (or (and (eq (canvas-browser-cdp-window-strategy) 'virtual-display)
+           canvas-browser-cdp--virtual-display)
+      canvas-browser-cdp--offscreen))
+
 (defun canvas-browser-cdp-target-window (new-window)
   "The parameters of `Target.createTarget\=' that say where a page opens.
-NEW-WINDOW non-nil asks for a window of its own.  Off screen, every page
-gets one, made where it is out of sight, so that no window comes into
-view first, and no page is a tab behind another, which chromium hides."
-  (if (eq (canvas-browser-cdp-window-strategy) 'offscreen)
-      (append '(:newWindow t) canvas-browser-cdp--offscreen)
+NEW-WINDOW non-nil asks for a window of its own.  Out of sight, every
+page gets one, made where it is out of sight, so that no window comes
+into view first, and no page is a tab behind another, which chromium
+hides."
+  (if (canvas-browser-cdp--hidden-p)
+      (append '(:newWindow t) (canvas-browser-cdp--hidden-bounds))
     (and new-window '(:newWindow t))))
 
 (defun canvas-browser-cdp--refocus ()
   "Give the focus back to Emacs, which chromium took with a window it opened.
 On macOS chromium comes to the front with every window it opens, though
 the window is out of sight, and the keys would go to it."
-  (when (and (eq (canvas-browser-cdp-window-strategy) 'offscreen)
+  (when (and (canvas-browser-cdp--hidden-p)
              (eq (framep (selected-frame)) 'ns))
     (select-frame-set-input-focus (selected-frame))))
 
 (defun canvas-browser-cdp-put-away-window (target)
-  "Put the window of TARGET, a page, out of sight, when windows go off screen.
-A window a page opens to sign in opens where chromium likes, in view, so
-it is moved as soon as it is heard of; a window Emacs opened is there
-already.  Either way Emacs takes the focus back."
-  (when (eq (canvas-browser-cdp-window-strategy) 'offscreen)
+  "Put the window of TARGET, a page, out of sight, when windows are kept so.
+A window a page opens to sign in opens where chromium likes, which may
+be in view, so it is moved as soon as it is heard of; a window Emacs
+opened is there already.  Either way Emacs takes the focus back."
+  (when (canvas-browser-cdp--hidden-p)
     (canvas-browser-cdp-send
      "Browser.getWindowForTarget" (list :targetId target)
      (lambda (result)
@@ -323,8 +369,99 @@ already.  Either way Emacs takes the focus back."
          (when (equal (plist-get bounds :windowState) "normal")
            (canvas-browser-cdp-send
             "Browser.setWindowBounds"
-            (list :windowId window :bounds canvas-browser-cdp--offscreen)))
+            (list :windowId window :bounds (canvas-browser-cdp--hidden-bounds))))
          (canvas-browser-cdp--refocus))))))
+
+;;;; The virtual display
+
+(defvar canvas-browser-cdp--display-process nil
+  "The process that keeps the virtual display, or nil.")
+
+(defun canvas-browser-cdp--read-display (text)
+  "The place and size of the virtual display that TEXT, its first line, gives.
+The line is \"LEFT TOP WIDTH HEIGHT\"; anything else is an error."
+  (let ((numbers (mapcar #'string-to-number
+                         (split-string (car (split-string text "\n")) " " t))))
+    (unless (and (= (length numbers) 4) (> (nth 2 numbers) 0) (> (nth 3 numbers) 0))
+      (error "The virtual display said %S" (string-trim text)))
+    (list :left (nth 0 numbers) :top (nth 1 numbers)
+          :width (nth 2 numbers) :height (nth 3 numbers))))
+
+(defun canvas-browser-cdp--display-ended (process _event)
+  "Stop chromium when PROCESS, the one keeping the virtual display, has ended.
+macOS moves the windows of a display that goes onto the main display, in
+view, so chromium is not left with them."
+  (when (and (eq process canvas-browser-cdp--display-process)
+             (not (process-live-p process)))
+    (setq canvas-browser-cdp--display-process nil
+          canvas-browser-cdp--virtual-display nil)
+    (when canvas-browser-cdp--process
+      (message "canvas-browser: the virtual display went away; chromium is stopped")
+      (canvas-browser-cdp-stop))))
+
+(defun canvas-browser-cdp--run-display ()
+  "Start the program of the virtual display and read where the display is.
+Signal an error that says why, when it cannot."
+  (let ((program canvas-browser-virtual-display-program))
+    (unless (file-executable-p program)
+      (error "No %s" (abbreviate-file-name program)))
+    (let* ((buffer (get-buffer-create " *canvas-browser-virtual-display*"))
+           (process (progn
+                      (with-current-buffer buffer (erase-buffer))
+                      (make-process :name "canvas-browser-virtual-display"
+                                    :buffer buffer
+                                    :noquery t
+                                    ;; The program ends when its input
+                                    ;; closes, as it does when Emacs does.
+                                    :connection-type 'pipe
+                                    :command (list program)
+                                    :sentinel #'canvas-browser-cdp--display-ended)))
+           (deadline (+ (float-time) canvas-browser-cdp-timeout))
+           (line-p (lambda ()
+                     (with-current-buffer buffer
+                       (string-search "\n" (buffer-string))))))
+      (setq canvas-browser-cdp--display-process process)
+      (while (and (process-live-p process)
+                  (not (funcall line-p))
+                  (< (float-time) deadline))
+        (accept-process-output process 0.05))
+      (condition-case failure
+          (setq canvas-browser-cdp--virtual-display
+                (canvas-browser-cdp--read-display
+                 (with-current-buffer buffer (buffer-string))))
+        (error
+         (setq canvas-browser-cdp--display-process nil)
+         (delete-process process)
+         (signal (car failure) (cdr failure)))))
+    ;; Emacs may end while chromium runs; chromium goes first, so that
+    ;; its windows do not come into view.
+    (add-hook 'kill-emacs-hook #'canvas-browser-cdp-stop)))
+
+(defun canvas-browser-cdp--ensure-virtual-display ()
+  "Have the virtual display, or else keep the windows past the corner.
+When the display cannot be had, the reader is told why, once."
+  (setq canvas-browser-cdp--fallback nil)
+  (unless (and canvas-browser-cdp--display-process
+               (process-live-p canvas-browser-cdp--display-process)
+               canvas-browser-cdp--virtual-display)
+    (condition-case failure
+        (canvas-browser-cdp--run-display)
+      (error
+       (setq canvas-browser-cdp--fallback (error-message-string failure))
+       (unless canvas-browser-cdp--fallback-told
+         (setq canvas-browser-cdp--fallback-told t)
+         (message (concat "canvas-browser: %s; windows go past the corner of the"
+                          " screen instead.  Run `make display' in %s to build"
+                          " the virtual display")
+                  canvas-browser-cdp--fallback
+                  (abbreviate-file-name canvas-browser-cdp--directory)))))))
+
+(defun canvas-browser-cdp--stop-display ()
+  "Stop the program of the virtual display, which takes the display away."
+  (when-let* ((process canvas-browser-cdp--display-process))
+    (setq canvas-browser-cdp--display-process nil
+          canvas-browser-cdp--virtual-display nil)
+    (delete-process process)))
 
 (defcustom canvas-browser-display ":98"
   "The X display chromium draws its window on.
@@ -420,7 +557,7 @@ display or on your own screen."
                (list "--enable-unsafe-swiftshader"))
              ;; The first window would open in view; each page opens a
              ;; window of its own out of sight instead.
-             (when (eq (canvas-browser-cdp-window-strategy) 'offscreen)
+             (when (canvas-browser-cdp--hidden-p)
                (list "--no-startup-window"))))))
 
 (defun canvas-browser-cdp--open-p (socket)
@@ -453,8 +590,9 @@ A command sent while it connects reaches nobody."
     ;; The command line names the chromium, and a machine without one
     ;; says so before an X server is started for it.
     (let ((command (canvas-browser-cdp--command-line)))
-      (when (eq (canvas-browser-cdp-window-strategy) 'xvfb)
-        (canvas-browser-cdp--ensure-display))
+      (pcase (canvas-browser-cdp-window-strategy)
+        ('xvfb (canvas-browser-cdp--ensure-display))
+        ('virtual-display (canvas-browser-cdp--ensure-virtual-display)))
       (let ((process-environment (canvas-browser-cdp--environment)))
         (make-directory (canvas-browser-cdp--profile) t)
         (ignore-errors (delete-file (canvas-browser-cdp--port-file)))
@@ -465,8 +603,21 @@ A command sent while it connects reaches nobody."
                             :command command)))
       (setq canvas-browser-cdp--socket (canvas-browser-cdp--connect)))))
 
+(defun canvas-browser-cdp--wait-for-exit (process)
+  "Wait a moment for PROCESS, which was killed, to be gone from the system.
+Emacs forgets a process it kills at once, but the system takes a moment
+to end it."
+  (when-let* ((pid (process-id process)))
+    (let ((deadline (+ (float-time) 1)))
+      (while (and (let ((state (alist-get 'state (process-attributes pid))))
+                    (and state (not (equal state "Z"))))
+                  (< (float-time) deadline))
+        (sleep-for 0.01)))))
+
 (defun canvas-browser-cdp-stop ()
-  "Close the websocket and stop chromium."
+  "Close the websocket, stop chromium, and then its virtual display.
+The display goes last: macOS would move the windows still on it onto
+your own screen."
   (when canvas-browser-cdp--socket
     ;; A socket whose chromium has gone has no process to close, and
     ;; closing it reaches for one.
@@ -474,8 +625,12 @@ A command sent while it connects reaches nobody."
       (websocket-close canvas-browser-cdp--socket))
     (setq canvas-browser-cdp--socket nil))
   (when canvas-browser-cdp--process
-    (delete-process canvas-browser-cdp--process)
-    (setq canvas-browser-cdp--process nil))
+    (let ((process canvas-browser-cdp--process))
+      (setq canvas-browser-cdp--process nil)
+      (delete-process process)
+      (when canvas-browser-cdp--display-process
+        (canvas-browser-cdp--wait-for-exit process))))
+  (canvas-browser-cdp--stop-display)
   (clrhash canvas-browser-cdp--waiting)
   (clrhash canvas-browser-cdp--listeners))
 

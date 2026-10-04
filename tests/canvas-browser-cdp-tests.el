@@ -232,7 +232,7 @@
   ;; WHEN the strategy is left at the default of Linux or of macOS, and
   ;;      then chosen
   ;; THEN the old setting makes it headless, AND a strategy chosen wins
-  (dolist (system '((gnu/linux . xvfb) (darwin . offscreen)))
+  (dolist (system '((gnu/linux . xvfb) (darwin . virtual-display)))
     (let ((system-type (car system))
           (canvas-browser-headless t)
           (canvas-browser-window-strategy (cdr system)))
@@ -246,12 +246,12 @@
         (canvas-browser-window-strategy 'xvfb))
     (should (eq (canvas-browser-cdp-window-strategy) 'xvfb))))
 
-(ert-deftest canvas-browser-cdp-macos-keeps-its-window-off-screen-by-default ()
+(ert-deftest canvas-browser-cdp-macos-gives-chromium-a-virtual-display-by-default ()
   ;; GIVEN macOS, where chromium draws on no X display, and then Linux
   ;; WHEN nothing is set
-  ;; THEN the window goes off screen on macOS, AND Linux keeps Xvfb
+  ;; THEN macOS has a virtual display, AND Linux keeps Xvfb
   (let ((system-type 'darwin))
-    (should (eq (canvas-browser-cdp--default-window-strategy) 'offscreen)))
+    (should (eq (canvas-browser-cdp--default-window-strategy) 'virtual-display)))
   (let ((system-type 'gnu/linux))
     (should (eq (canvas-browser-cdp--default-window-strategy) 'xvfb))))
 
@@ -353,6 +353,128 @@ The answer about the window comes at once."
         (cl-letf (((symbol-function 'framep) (lambda (_frame) t)))
           (canvas-browser-cdp-test--put-away "normal"))
         (should-not focused)))))
+
+;;;; The virtual display
+
+(defmacro canvas-browser-cdp-test--with-display-program (script &rest body)
+  "Run BODY with a virtual display made by a shell SCRIPT, on macOS.
+Nothing of the virtual display is left from before, nor after."
+  (declare (indent 1))
+  `(let* ((program (make-temp-file "canvas-browser-display-" nil nil
+                                   (concat "#!/bin/sh\n" ,script "\n")))
+          (canvas-browser-virtual-display-program program)
+          (canvas-browser-headless nil)
+          (canvas-browser-window-strategy 'virtual-display)
+          (canvas-browser-cdp--fallback nil)
+          (canvas-browser-cdp--fallback-told nil)
+          (canvas-browser-cdp--display-process nil)
+          (canvas-browser-cdp--virtual-display nil)
+          (canvas-browser-cdp-timeout 5)
+          (kill-emacs-hook kill-emacs-hook))
+     (set-file-modes program #o755)
+     (unwind-protect
+         (progn ,@body)
+       (canvas-browser-cdp--stop-display)
+       (delete-file program))))
+
+(ert-deftest canvas-browser-cdp-reads-where-the-virtual-display-is ()
+  ;; GIVEN the line the program of the virtual display prints, and then
+  ;;       something else
+  ;; WHEN it is read
+  ;; THEN it is the place and size of the display, AND anything else is
+  ;;      an error that quotes it
+  (should (equal (canvas-browser-cdp--read-display "3440 1440 1920 1200\n")
+                 '(:left 3440 :top 1440 :width 1920 :height 1200)))
+  (should (string-search "no mode"
+                         (error-message-string
+                          (should-error (canvas-browser-cdp--read-display "no mode\n"))))))
+
+(ert-deftest canvas-browser-cdp-a-page-opens-on-the-virtual-display ()
+  ;; GIVEN a program that makes a virtual display past the corner
+  ;; WHEN the display is had, and a page is to open, and then a window to
+  ;;      be put away
+  ;; THEN the page opens in a window of its own that fills the display,
+  ;;      AND a window is moved there, AND Emacs stops chromium before
+  ;;      the display when it ends
+  (canvas-browser-cdp-test--with-display-program "echo 3440 1440 1920 1200; cat"
+    (canvas-browser-cdp--ensure-virtual-display)
+    (should (process-live-p canvas-browser-cdp--display-process))
+    (should (eq (canvas-browser-cdp-window-strategy) 'virtual-display))
+    (should (equal (canvas-browser-cdp-target-window nil)
+                   '(:newWindow t :left 3440 :top 1440 :width 1920 :height 1200)))
+    (should (equal (canvas-browser-cdp--hidden-bounds)
+                   '(:left 3440 :top 1440 :width 1920 :height 1200)))
+    (should (memq #'canvas-browser-cdp-stop kill-emacs-hook))
+    ;; Had already, it is not made again.
+    (let ((process canvas-browser-cdp--display-process))
+      (canvas-browser-cdp--ensure-virtual-display)
+      (should (eq canvas-browser-cdp--display-process process)))))
+
+(ert-deftest canvas-browser-cdp-without-the-program-windows-go-past-the-corner ()
+  ;; GIVEN no program of the virtual display, as before `make display'
+  ;; WHEN the display is to be had, twice
+  ;; THEN the windows go past the corner of the screen instead, AND the
+  ;;      reader is told why and how to build it, once
+  (canvas-browser-cdp-test--with-display-program "exit 0"
+    (delete-file canvas-browser-virtual-display-program)
+    (let ((told nil))
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format &rest args) (push (apply #'format format args) told))))
+        (canvas-browser-cdp--ensure-virtual-display)
+        (canvas-browser-cdp--ensure-virtual-display))
+      (should (= (length told) 1))
+      (should (string-search "make display" (car told)))
+      (should (string-search "No " (car told))))
+    (should (eq (canvas-browser-cdp-window-strategy) 'offscreen))
+    (should (equal (canvas-browser-cdp--hidden-bounds) canvas-browser-cdp--offscreen))))
+
+(ert-deftest canvas-browser-cdp-a-program-that-fails-leaves-the-corner ()
+  ;; GIVEN a program of the virtual display that fails, as on a macOS
+  ;;       that makes no virtual display
+  ;; WHEN the display is to be had
+  ;; THEN the windows go past the corner instead, for the reason the
+  ;;      program gave, AND no process is left
+  (canvas-browser-cdp-test--with-display-program
+      "echo 'canvas-browser-display: macOS made no virtual display' >&2; exit 1"
+    (cl-letf (((symbol-function 'message) #'ignore))
+      (canvas-browser-cdp--ensure-virtual-display))
+    (should (string-search "made no virtual display" canvas-browser-cdp--fallback))
+    (should (eq (canvas-browser-cdp-window-strategy) 'offscreen))
+    (should-not canvas-browser-cdp--display-process)))
+
+(ert-deftest canvas-browser-cdp-chromium-stops-when-the-display-goes ()
+  ;; GIVEN chromium on the virtual display
+  ;; WHEN the program of the display ends by itself
+  ;; THEN chromium is stopped, since macOS would move its windows into view
+  (canvas-browser-cdp-test--with-display-program "echo 3440 1440 1920 1200; cat"
+    (let ((stopped nil)
+          (canvas-browser-cdp--process 'chromium))
+      (cl-letf (((symbol-function 'canvas-browser-cdp-stop) (lambda () (setq stopped t)))
+                ((symbol-function 'message) #'ignore))
+        (canvas-browser-cdp--ensure-virtual-display)
+        (let ((process canvas-browser-cdp--display-process))
+          (signal-process process 'kill)
+          (let ((deadline (+ (float-time) 5)))
+            (while (and (not stopped) (< (float-time) deadline))
+              (accept-process-output nil 0.05))))
+        (should stopped)
+        (should-not canvas-browser-cdp--display-process)
+        (should-not canvas-browser-cdp--virtual-display)))))
+
+(ert-deftest canvas-browser-cdp-chromium-stops-before-its-display ()
+  ;; GIVEN chromium on the virtual display
+  ;; WHEN the client stops
+  ;; THEN chromium is stopped first, and the display after it
+  (let ((killed nil)
+        (canvas-browser-cdp--socket nil)
+        (canvas-browser-cdp--process 'chromium)
+        (canvas-browser-cdp--display-process 'display)
+        (canvas-browser-cdp--virtual-display '(:left 0 :top 0 :width 1 :height 1)))
+    (cl-letf (((symbol-function 'delete-process) (lambda (process) (push process killed)))
+              ((symbol-function 'canvas-browser-cdp--wait-for-exit) #'ignore))
+      (canvas-browser-cdp-stop))
+    (should (equal (reverse killed) '(chromium display)))
+    (should-not canvas-browser-cdp--display-process)))
 
 (ert-deftest canvas-browser-cdp-start-runs-chromium-headless-once ()
   ;; GIVEN a stubbed process and websocket
