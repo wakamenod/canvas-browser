@@ -508,17 +508,17 @@ drawing the whole window that way, which `--use-angle=swiftshader` does,
 cost two whole cores.
 
 `canvas-browser-window-strategy` says how chromium gets its window:
-`xvfb`, the default, is the display of its own above; `headless` is no
-window at all, for a machine with no X server; and `minimized` is for
-macOS, below. `canvas-browser-headless`, the older setting, still
-means `headless` while the strategy is left at `xvfb`.
+`xvfb`, the default on Linux, is the display of its own above;
+`headless` is no window at all, for a machine with no X server; and
+`minimized`, the default on macOS, is below. `canvas-browser-headless`,
+the older setting, still means `headless` while the strategy is left at
+its default.
 
 ### On macOS
 
 Chromium on macOS draws on no X display, so `Xvfb` cannot hide it.
-Instead, its window opens on your own screen and is minimized at once:
-
-    (setq canvas-browser-window-strategy 'minimized)
+Instead, its window opens on your own screen and is minimized at once.
+This is the default on macOS, so nothing needs to be set.
 
 A minimized window still sends every frame and takes every key, and the
 sites see the same Chrome as with a window on `Xvfb`, with the WebGL of
@@ -542,7 +542,7 @@ apart from the Chrome you browse with.
 | `canvas-browser-chromium` | chromium, chromium-browser, google-chrome, and the apps of Chromium and Google Chrome on macOS | the names looked for |
 | `canvas-browser-profile-directory` | by the chromium found | where the profile goes |
 | `canvas-browser-cdp-timeout` | 10 | seconds to wait for chromium |
-| `canvas-browser-window-strategy` | xvfb | how chromium gets its window: xvfb, headless or minimized |
+| `canvas-browser-window-strategy` | minimized on macOS, else xvfb | how chromium gets its window: xvfb, headless or minimized |
 | `canvas-browser-headless` | nil | the older way to say headless |
 | `canvas-browser-display` | :98 | the X display chromium draws its window on |
 | `canvas-browser-quality` | 70 | the quality of a moving frame, from 1 to 100 |

@@ -192,7 +192,7 @@
             ((symbol-function 'canvas-browser-cdp--display-live-p) (lambda (_display) nil)))
     (let ((raised (should-error (canvas-browser-cdp--ensure-display) :type 'user-error)))
       (should (string-search "xvfb" (cadr raised)))
-      (should (string-search "canvas-browser-headless" (cadr raised))))))
+      (should (string-search "canvas-browser-window-strategy" (cadr raised))))))
 
 (ert-deftest canvas-browser-cdp-a-chromium-with-a-window-is-not-headless ()
   ;; GIVEN the setting for a chromium with a window of its own
@@ -201,6 +201,7 @@
   ;;      looks at, AND it is told the display to draw on
   (cl-letf (((symbol-function 'executable-find) (lambda (name) (concat "/usr/bin/" name))))
     (let* ((canvas-browser-headless nil)
+           (canvas-browser-window-strategy 'xvfb)
            (command (canvas-browser-cdp--command-line))
            (environment (canvas-browser-cdp--environment)))
       (should-not (member "--headless=new" command))
@@ -228,16 +229,31 @@
 
 (ert-deftest canvas-browser-cdp-the-old-headless-setting-still-counts ()
   ;; GIVEN `canvas-browser-headless' set, as before the window strategy
-  ;; WHEN the strategy is left at its default, and then chosen
+  ;; WHEN the strategy is left at the default of Linux or of macOS, and
+  ;;      then chosen
   ;; THEN the old setting makes it headless, AND a strategy chosen wins
-  (let ((canvas-browser-headless t)
-        (canvas-browser-window-strategy 'xvfb))
-    (should (eq (canvas-browser-cdp-window-strategy) 'headless))
-    (setq canvas-browser-window-strategy 'minimized)
+  (dolist (system '((gnu/linux . xvfb) (darwin . minimized)))
+    (let ((system-type (car system))
+          (canvas-browser-headless t)
+          (canvas-browser-window-strategy (cdr system)))
+      (should (eq (canvas-browser-cdp-window-strategy) 'headless))))
+  (let ((system-type 'gnu/linux)
+        (canvas-browser-headless t)
+        (canvas-browser-window-strategy 'minimized))
     (should (eq (canvas-browser-cdp-window-strategy) 'minimized)))
-  (let ((canvas-browser-headless nil)
+  (let ((system-type 'gnu/linux)
+        (canvas-browser-headless nil)
         (canvas-browser-window-strategy 'xvfb))
     (should (eq (canvas-browser-cdp-window-strategy) 'xvfb))))
+
+(ert-deftest canvas-browser-cdp-macos-keeps-its-window-minimized-by-default ()
+  ;; GIVEN macOS, where chromium draws on no X display, and then Linux
+  ;; WHEN nothing is set
+  ;; THEN the window is kept minimized on macOS, AND Linux keeps Xvfb
+  (let ((system-type 'darwin))
+    (should (eq (canvas-browser-cdp--default-window-strategy) 'minimized)))
+  (let ((system-type 'gnu/linux))
+    (should (eq (canvas-browser-cdp--default-window-strategy) 'xvfb))))
 
 (ert-deftest canvas-browser-cdp-a-minimized-chromium-needs-no-display ()
   ;; GIVEN windows kept minimized on your own screen, as on macOS

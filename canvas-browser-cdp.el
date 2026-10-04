@@ -242,14 +242,18 @@ error rather than with no."
 A headless chromium says so in its user agent, keeps `navigator.webdriver\='
 true and has no WebGL at all, and a site behind a bot check reads all
 three: it then asks the reader to pick out traffic lights rather than to
-tick a box.  A chromium with a window reads as the browser it is.  Set
-this when there is no X server to give it one.
+tick a box.  A chromium with a window reads as the browser it is.
 This is the older name of `canvas-browser-window-strategy\=' set to
-`headless\=', and is heard only while that is left at `xvfb\='."
+`headless\=', and is heard only while that is left at its default; set
+that one instead."
   :type 'boolean
   :group 'canvas-browser)
 
-(defcustom canvas-browser-window-strategy 'xvfb
+(defun canvas-browser-cdp--default-window-strategy ()
+  "The window strategy of this system: `minimized\=' on macOS, else `xvfb\='."
+  (if (eq system-type 'darwin) 'minimized 'xvfb))
+
+(defcustom canvas-browser-window-strategy (canvas-browser-cdp--default-window-strategy)
   "How chromium gets a window that nobody looks at.
 `xvfb\=': a window on an X display of its own, `canvas-browser-display\=',
 where `Xvfb\=' is started.  This needs an X server, so it is for Linux.
@@ -259,7 +263,9 @@ where `Xvfb\=' is started.  This needs an X server, so it is for Linux.
 and so is every window a page opens later.  This is for macOS, where
 chromium draws on no X display and a minimized window still sends every
 frame and takes every key.
-While this is `xvfb\=', a non-nil `canvas-browser-headless\=' means `headless\='."
+The default is `minimized\=' on macOS and `xvfb\=' elsewhere.  While this
+is left at its default, a non-nil `canvas-browser-headless\=' means
+`headless\='."
   :type '(choice (const :tag "A window on an X display of its own" xvfb)
                  (const :tag "No window" headless)
                  (const :tag "A minimized window on your screen" minimized))
@@ -269,7 +275,9 @@ While this is `xvfb\=', a non-nil `canvas-browser-headless\=' means `headless\='
   "The way chromium gets its window, from the settings.
 `canvas-browser-headless\=' came first, so a setting of it still counts
 until the new setting is changed from its default."
-  (if (and (eq canvas-browser-window-strategy 'xvfb) canvas-browser-headless)
+  (if (and canvas-browser-headless
+           (eq canvas-browser-window-strategy
+               (canvas-browser-cdp--default-window-strategy)))
       'headless
     canvas-browser-window-strategy))
 
@@ -355,7 +363,7 @@ The display listens on its socket alone, never on the network."
   (unless (canvas-browser-cdp--display-live-p canvas-browser-display)
     (unless (executable-find "Xvfb")
       (user-error (concat "canvas-browser: no Xvfb; run `sudo apt install xvfb',"
-                          " or set `canvas-browser-headless'")))
+                          " or set `canvas-browser-window-strategy'")))
     (make-process :name "canvas-browser-xvfb"
                   :buffer (get-buffer-create " *canvas-browser-xvfb*")
                   :noquery t
