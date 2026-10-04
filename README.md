@@ -93,6 +93,75 @@ put the three directories on the load path, here with the clones in
 (autoload 'canvas-browser-browse-url "canvas-browser")
 ```
 
+### Setting up on macOS
+
+The macOS support lives in the fork at
+`https://github.com/wakamenod/canvas-browser`. These are the steps on a
+Mac with Homebrew, from nothing.
+
+1. **An Emacs with canvas images.** They are in the master branch of
+   Emacs since 2026-08-16, and the NS build draws them too. With
+   emacs-plus that is `brew install emacs-plus@32`, at a revision of
+   that day or later. `(image-type-available-p 'canvas)` says `t` when
+   it is right.
+2. **The libraries of the module.** canvas-diagram builds its module
+   with pango and cairo, and reads icons with librsvg and gdk-pixbuf:
+
+   ```sh
+   brew install pkg-config pango cairo librsvg gdk-pixbuf
+   xcode-select --install    # clang, and the Swift of the display
+   ```
+
+3. **The clones and the builds.** The Makefile of canvas-diagram looks
+   for `emacs-module.h` in `/usr/local/include`, and Homebrew puts it in
+   its own prefix, so the flags name that too:
+
+   ```sh
+   git clone https://github.com/Daskeladden/canvas-keys.git
+   git clone https://github.com/Daskeladden/canvas-diagram.git
+   git clone https://github.com/wakamenod/canvas-browser.git
+   make -C canvas-diagram \
+     CFLAGS="-O2 -Wall -Wextra -std=gnu11 -fPIC -I$(brew --prefix)/include"
+   make -C canvas-browser display
+   ```
+
+4. **A browser.** Google Chrome and Brave both work. Brave blocks ads
+   by itself; Google Chrome no longer loads an extension from the command
+   line, so `canvas-browser-install-ublock` does nothing for it. Give
+   Brave a profile of its own, since a profile of Chrome keeps its
+   cookies under another key:
+
+   ```elisp
+   (setq canvas-browser-chromium
+         '("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser")
+         canvas-browser-profile-directory
+         (expand-file-name "~/.cache/canvas-browser/profile-brave"))
+   ```
+
+   A new profile of Brave fetches its lists of ads a little after it
+   first starts, so ads show until chromium is next started.
+5. **Japanese and other input methods.** They type into a page in
+   insert state. With the
+   [inline patch](https://github.com/takaxp/ns-inline-patch) the text
+   being converted shows in the field of the page.
+
+Instead of the clones, `package-vc` can fetch and build the three
+packages. canvas-browser needs the other two, which no archive carries,
+so they come first:
+
+```elisp
+(package-vc-install
+ '(canvas-keys :url "https://github.com/Daskeladden/canvas-keys"))
+(package-vc-install
+ '(canvas-diagram
+   :url "https://github.com/Daskeladden/canvas-diagram"
+   :shell-command "make CFLAGS='-O2 -Wall -Wextra -std=gnu11 -fPIC -I/opt/homebrew/include'"))
+(package-vc-install
+ '(canvas-browser
+   :url "https://github.com/wakamenod/canvas-browser"
+   :make "display"))
+```
+
 ## Use
 
 `M-x canvas-browser` asks for a URL and opens it in a buffer. The page is
