@@ -144,6 +144,38 @@ Mac with Homebrew, from nothing.
    insert state. With the
    [inline patch](https://github.com/takaxp/ns-inline-patch) the text
    being converted shows in the field of the page.
+6. **Extensions from the Chrome Web Store.** Its dialog that adds an
+   extension is drawn by the browser on the display nobody sees, so it
+   cannot be clicked from a page. Add the extension to the profile of
+   canvas-browser in a browser on your own screen instead:
+
+   1. Stop the browser of canvas-browser with
+      `M-x eval-expression RET (canvas-browser-cdp-stop)`, or by quitting
+      Emacs. `canvas-browser-restart-chromium` starts it again at once,
+      so it will not do.
+   2. Start Brave on your screen with the same profile:
+
+      ```sh
+      open -na "Brave Browser" --args \
+        --user-data-dir="$HOME/.cache/canvas-browser/profile-brave" \
+        "https://chromewebstore.google.com/"
+      ```
+
+   3. Add the extension, and sign in to it if it asks.
+   4. Quit that Brave with `Cmd-Q`. Closing its window is not enough:
+      while a Brave holds the profile, canvas-browser cannot start its
+      own, and pages are not read.
+   5. Open a page in canvas-browser. Brave starts with the extension.
+
+   Brave opens again the pages it had open when it was quit, out of
+   sight, so close them before you quit it.
+
+   What an extension draws in the page works, and what it draws in the
+   window of the browser does not. With 1Password the menu that comes
+   up in a field of a login page shows on the canvas, and a click on it
+   fills the field; the button of the toolbar, its popup, its keyboard
+   shortcuts and the dialogs of passkeys belong to the window, out of
+   sight.
 
 Instead of the clones, `package-vc` can fetch and build the three
 packages. canvas-browser needs the other two, which no archive carries,
