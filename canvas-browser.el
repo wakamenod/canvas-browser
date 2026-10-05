@@ -990,6 +990,64 @@ attached was no news to it.  An embedded page keeps the size it was given."
                         (equal (buffer-local-value 'canvas-browser--target buffer) target)))
                  (buffer-list))))
 
+(defcustom canvas-browser-show-strays t
+  "Whether a page that no page of Emacs opened is shown in a tab.
+A link opened in another program goes to the default browser, and when
+that is the chromium canvas-browser runs, the page opens there, on a
+display nobody sees.  On, it comes to Emacs as a tab of its own, and the
+frame that shows it is raised.  `canvas-browser-show-hidden-pages\='
+brings the pages that opened so before."
+  :type 'boolean
+  :group 'canvas-browser)
+
+(defvar canvas-browser--let-go (make-hash-table :test #'equal)
+  "The targets whose buffers closed them, which are no strays to show.
+Chromium may tell of such a page once more before it is gone.")
+
+(defun canvas-browser--stray-p (info)
+  "Whether INFO is of a page of the web that no buffer shows.
+A blank page, a page of chromium's own, as its new tab, and a page of an
+extension are no pages to show."
+  (let ((target (plist-get info :targetId))
+        (url (plist-get info :url)))
+    (and (equal (plist-get info :type) "page")
+         (stringp url)
+         (string-match-p "\\`\\(https?\\|file\\):" url)
+         (not (gethash target canvas-browser--let-go))
+         (not (canvas-browser--buffer-of-target target)))))
+
+(defun canvas-browser--show-stray (info &optional raise)
+  "Show the page of INFO, which no page of Emacs opened, in a tab; its buffer.
+With RAISE the frame that shows it is raised, since a link opened in
+another program is a page you want to see now."
+  (let ((buffer (save-current-buffer
+                  (canvas-browser--show-window (plist-get info :targetId)
+                                               (plist-get info :url) nil))))
+    (when-let* ((raise)
+                (window (get-buffer-window buffer t)))
+      (select-frame-set-input-focus (window-frame window)))
+    buffer))
+
+(defun canvas-browser-show-hidden-pages ()
+  "Show in tabs the pages of chromium that no buffer shows.
+They are the pages that links from other programs opened while
+`canvas-browser-show-strays\=' was off, or before it was there."
+  (interactive)
+  (unless (canvas-browser-cdp-running-p)
+    (user-error "canvas-browser: chromium is not running"))
+  (canvas-browser-cdp-send
+   "Target.getTargets" nil
+   (lambda (result)
+     (let ((strays (seq-filter #'canvas-browser--stray-p
+                               (append (plist-get result :targetInfos) nil))))
+       (dolist (info strays)
+         (canvas-browser-cdp-put-away-window (plist-get info :targetId))
+         (canvas-browser--show-stray info))
+       (message "canvas-browser: %s"
+                (if strays
+                    (format "%d hidden pages are in tabs now" (length strays))
+                  "no page is hidden"))))))
+
 (defun canvas-browser--watch-targets ()
   "Hear of the pages chromium opens and closes.
 A button to sign in with Google or Apple opens a window of its own, and
@@ -1009,6 +1067,10 @@ it, since the host finds it by that name."
          (buffer (canvas-browser--buffer-of-target (plist-get info :targetId)))
          (url (plist-get info :url))
          (title (plist-get info :title)))
+    ;; A page opened from elsewhere may start blank and get its address
+    ;; only now.
+    (when (and (not buffer) canvas-browser-show-strays (canvas-browser--stray-p info))
+      (canvas-browser--show-stray info t))
     (when buffer
       (with-current-buffer buffer
         ;; Chromium names a page after its file until it moves again, so
@@ -1031,25 +1093,36 @@ it, since the host finds it by that name."
 
 (defun canvas-browser--target-created (params)
   "Show the page of PARAMS in a buffer of its own, if one of ours opened it.
-A frame, a worker, or a page of nobody\='s here is left alone, but the
-window of any page is put out of sight when
-`canvas-browser-window-strategy\=' says so."
+A page of the web that no page of Emacs opened, as a link from another
+program, is shown too, while `canvas-browser-show-strays\=' is on.  A
+frame or a worker is left alone, but the window of any page is put out
+of sight when `canvas-browser-window-strategy\=' says so."
   (let* ((info (plist-get params :targetInfo))
          (target (plist-get info :targetId))
          (opener (canvas-browser--buffer-of-target (plist-get info :openerId))))
     (when (equal (plist-get info :type) "page")
       (canvas-browser-cdp-put-away-window target))
-    (when (and opener
-               (equal (plist-get info :type) "page")
-               (not (canvas-browser--buffer-of-target target)))
-      (canvas-browser--show-window target (plist-get info :url) opener))))
+    (cond ((and opener
+                (equal (plist-get info :type) "page")
+                (not (canvas-browser--buffer-of-target target)))
+           (canvas-browser--show-window target (plist-get info :url) opener))
+          ((and (not opener) canvas-browser-show-strays (canvas-browser--stray-p info))
+           (canvas-browser--show-stray info t)))))
 
 (defun canvas-browser--show-window (target url opener)
   "Show TARGET, a window the page of OPENER opened at URL; its buffer.
-It is laid out at the size of the page that opened it, until a window of
-Emacs shows it and it is fitted to that."
-  (let ((buffer (canvas-browser--page-buffer url))
-        (size (buffer-local-value 'canvas-browser--size opener)))
+It is laid out at the size of the page that opened it, or of another
+page when no page of Emacs opened it, until a window of Emacs shows it
+and it is fitted to that."
+  (let* ((buffer (canvas-browser--page-buffer url))
+         (like (or opener
+                   (seq-find (lambda (other)
+                               (and (not (eq other buffer))
+                                    (eq (buffer-local-value 'major-mode other) 'canvas-browser-mode)
+                                    (buffer-local-value 'canvas-browser--size other)))
+                             (buffer-list))))
+         (size (or (and like (buffer-local-value 'canvas-browser--size like))
+                   '(800 . 600))))
     (pop-to-buffer buffer)
     (with-current-buffer buffer
       (canvas-browser--adopt (car size) (cdr size))
@@ -1108,6 +1181,7 @@ A choice of files that this page waited for is forgotten with it."
   (when canvas-browser--session
     (canvas-browser-cdp-forget canvas-browser--session))
   (when (and canvas-browser--target (canvas-browser-cdp-running-p))
+    (puthash canvas-browser--target t canvas-browser--let-go)
     (canvas-browser-cdp-send "Target.closeTarget"
                              (list :targetId canvas-browser--target)))
   (when canvas-browser--context
@@ -2832,10 +2906,11 @@ and the settings.  The widths line the columns of the two rows up."
    ("x" "close" canvas-browser-close-tab)
    ("X" "reopen" canvas-browser-reopen-tab)
    ("r" "reload" canvas-browser-refresh)
-   ("b" "back" canvas-browser-back)
-   ("F" "forward" canvas-browser-forward)
+   ("M-p" "back" canvas-browser-back)
+   ("M-n" "forward" canvas-browser-forward)
    ("B" "bookmark" canvas-browser-bookmark)
-   ("J" "bookmarks" canvas-browser-open-bookmark)]
+   ("J" "bookmarks" canvas-browser-open-bookmark)
+   ("b" "edit bookmarks" canvas-browser-list-bookmarks)]
   ["Page"
    ("f" "hints" canvas-browser-hints)
    ("M-j" "jump" canvas-browser-caret-jump)
@@ -2873,6 +2948,7 @@ keys zoom the page.  `r\=' reads the page again, as `g\=', which is
   "y" #'canvas-browser-copy-url
   "B" #'canvas-browser-bookmark
   "J" #'canvas-browser-open-bookmark
+  "b" #'canvas-browser-list-bookmarks
   "v" #'canvas-browser-caret-mode
   "M-j" #'canvas-browser-caret-jump
   ;; The key of avy jumps in the page, wherever it is bound, and even
@@ -4758,6 +4834,17 @@ replaced, as `bookmark-set' replaces it."
   (when (string-blank-p name)
     (user-error "canvas-browser: a bookmark needs a name"))
   (bookmark-set name))
+
+(declare-function bookmark-bmenu-list "bookmark")
+
+(defun canvas-browser-list-bookmarks ()
+  "Show the list of bookmarks, where they are renamed and deleted.
+`r\=' renames the one on the line, `d\=' and `x\=' delete, and `q\='
+goes back to the page.  The address of a page is changed by keeping it
+again under the same name with `B\='."
+  (interactive)
+  (require 'bookmark)
+  (bookmark-bmenu-list))
 
 (defun canvas-browser--bookmark-names ()
   "The names of the bookmarks of pages, in the order of the bookmark list."

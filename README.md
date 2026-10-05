@@ -293,6 +293,7 @@ Normal state keeps the keys of Emacs:
 | `e` | edits the address of this page, and goes to what you make of it |
 | `t` | opens a page you kept, a URL, or a search, in a new tab, as the `+` of the tabs does |
 | `B`, `J` | keep this page as a bookmark, and open a page you kept |
+| `b` | lists the bookmarks, where `r` renames one, `d` and `x` delete, and `q` goes back |
 | `y` | copies the address of this page, as `f y` copies the address of a link |
 | `C-<next>`, `C-<prior>` | go to the next and the previous tab, in insert state as well |
 | `C-c C-t` | choose a tab by its title or address, from a list with the icons |
@@ -553,8 +554,16 @@ page that opened it, as a browser shows a new window: the buttons to
 sign in with Google or with Apple open one, and so does a link that
 opens a tab. When such a window closes itself, as the one to sign in
 does once you have, its buffer goes with it. Chromium tells of every
-page that opens and closes; only a page that one of these buffers
-opened is taken, and a frame or a worker is left alone.
+page that opens and closes, and a frame or a worker is left alone.
+
+A link you open in another program goes to your default browser. When
+that is the chromium canvas-browser runs, as Brave or Chrome may be,
+the page opens there, on a display nobody sees. It comes to Emacs as a
+tab of its own instead, and the frame that shows it is raised; a blank
+page, a page of the browser's own and a page of an extension are left
+alone. `canvas-browser-show-strays` turns this off, and
+`M-x canvas-browser-show-hidden-pages` brings to tabs the pages that
+opened so while it was off.
 
 ## Tabs
 

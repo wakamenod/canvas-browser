@@ -2833,6 +2833,11 @@ selection at once."
     (should (equal (canvas-browser-test--params "Target.setDiscoverTargets")
                    '(:discover t)))))
 
+(defun canvas-browser-test--kill-target (target)
+  "Kill the page buffer of TARGET, if there is one."
+  (when-let* ((buffer (canvas-browser--buffer-of-target target)))
+    (kill-buffer buffer)))
+
 (ert-deftest canvas-browser-every-window-is-put-away-when-asked ()
   ;; GIVEN a page buffer
   ;; WHEN chromium tells of a page its page opened, of a page nobody
@@ -2850,8 +2855,8 @@ selection at once."
               (canvas-browser-test--created "P2" "page" nil)
               (canvas-browser-test--created "W1" "service_worker" nil)
               (should (equal (reverse put-away) '("P1" "P2"))))
-          (when-let* ((opened (canvas-browser--buffer-of-target "P1")))
-            (kill-buffer opened)))))))
+          (canvas-browser-test--kill-target "P1")
+          (canvas-browser-test--kill-target "P2"))))))
 
 (ert-deftest canvas-browser-a-page-off-screen-opens-in-a-window-out-of-sight ()
   ;; GIVEN windows off screen, as on macOS
@@ -2892,15 +2897,106 @@ selection at once."
         (when (buffer-live-p opened) (kill-buffer opened))))))
 
 (ert-deftest canvas-browser-only-windows-of-its-own-pages-get-a-buffer ()
-  ;; GIVEN a page buffer
+  ;; GIVEN a page buffer, and the pages no page of Emacs opened left alone
   ;; WHEN chromium tells of a page some other page opened, and of a frame
   ;;      this page opened
   ;; THEN neither gets a buffer: only a window one of these pages opened
   (canvas-browser-test--in-page
+    (setq-local canvas-browser-show-strays nil)
     (canvas-browser-test--created "P2" "page" "SOMEONE-ELSE")
     (canvas-browser-test--created "F1" "iframe" canvas-browser--target)
     (should-not (canvas-browser--buffer-of-target "P2"))
     (should-not (canvas-browser--buffer-of-target "F1"))))
+
+(ert-deftest canvas-browser-a-page-from-another-program-comes-to-a-tab ()
+  ;; GIVEN a page buffer, and the frame raising nothing
+  ;; WHEN chromium tells of a page of the web that no page opened, as a
+  ;;      link from another program opens, of a blank one, and of one
+  ;;      of chromium's own
+  ;; THEN the page of the web is shown in a buffer of its own, attached
+  ;;      to it, AND the other two are left alone
+  (let ((canvas-browser--let-go (make-hash-table :test #'equal)))
+    (canvas-browser-test--in-page
+     (cl-letf (((symbol-function 'select-frame-set-input-focus) #'ignore))
+       (unwind-protect
+           (progn
+             (canvas-browser--target-created
+              '(:targetInfo (:targetId "S1" :type "page" :url "https://example.com/from-mail")))
+             (canvas-browser--target-created
+              '(:targetInfo (:targetId "S2" :type "page" :url "about:blank")))
+             (canvas-browser--target-created
+              '(:targetInfo (:targetId "S3" :type "page" :url "chrome://newtab/")))
+             (let ((shown (canvas-browser--buffer-of-target "S1")))
+               (should (buffer-live-p shown))
+               (should (equal "https://example.com/from-mail"
+                              (buffer-local-value 'canvas-browser--url shown))))
+             (should (equal (plist-get (canvas-browser-test--params "Target.attachToTarget")
+                                       :targetId)
+                            "S1"))
+             (should-not (canvas-browser--buffer-of-target "S2"))
+             (should-not (canvas-browser--buffer-of-target "S3")))
+         (canvas-browser-test--kill-target "S1"))))))
+
+(ert-deftest canvas-browser-a-blank-page-from-elsewhere-comes-once-it-has-an-address ()
+  ;; GIVEN a blank page no page opened
+  ;; WHEN it gets the address of the web it was opened for
+  ;; THEN it comes to a tab then, once
+  (let ((canvas-browser--let-go (make-hash-table :test #'equal)))
+    (canvas-browser-test--in-page
+     (cl-letf (((symbol-function 'select-frame-set-input-focus) #'ignore))
+       (unwind-protect
+           (progn
+             (canvas-browser--target-created
+              '(:targetInfo (:targetId "S1" :type "page" :url "about:blank")))
+             (should-not (canvas-browser--buffer-of-target "S1"))
+             (dotimes (_ 2)
+               (canvas-browser--target-changed
+		'(:targetInfo (:targetId "S1" :type "page" :url "https://example.com/late"))))
+             (should (= 1 (cl-count-if (lambda (b) (equal (buffer-local-value 'canvas-browser--target b) "S1"))
+                                       (buffer-list)))))
+         (canvas-browser-test--kill-target "S1"))))))
+
+(ert-deftest canvas-browser-a-page-its-buffer-closed-is-no-stray ()
+  ;; GIVEN a page buffer whose page is at an address of the web
+  ;; WHEN the buffer is killed, and chromium tells of its page once more
+  ;;      before it is gone
+  ;; THEN the page does not come back in a new tab
+  (canvas-browser-test--in-page
+    (let ((target canvas-browser--target))
+      (canvas-browser--release)
+      (setq canvas-browser--target nil)
+      (canvas-browser--target-changed
+       (list :targetInfo (list :targetId target :type "page" :url "https://example.org")))
+      (should-not (canvas-browser--buffer-of-target target)))))
+
+(ert-deftest canvas-browser-hidden-pages-are-brought-to-tabs ()
+  ;; GIVEN chromium with a page in a buffer and two pages in none
+  ;; WHEN the hidden pages are asked for
+  ;; THEN the two get buffers of their own, AND the shown one no second
+  (canvas-browser-test--in-page
+    (let ((mine canvas-browser--target))
+      (cl-letf (((symbol-function 'canvas-browser-cdp-send)
+                 (lambda (method params &optional answer _session)
+                   (push (cons method params) canvas-browser-test--commands)
+                   (when (and answer (equal method "Target.getTargets"))
+                     (funcall answer
+                              (list :targetInfos
+                                    (vector (list :targetId mine :type "page" :url "https://example.org")
+                                            '(:targetId "H1" :type "page" :url "https://github.com/")
+                                            '(:targetId "H2" :type "page" :url "https://www.youtube.com/")
+                                            '(:targetId "W1" :type "service_worker" :url "https://x.org/sw.js")))))))
+                ((symbol-function 'canvas-browser-cdp-running-p) (lambda () t))
+                ((symbol-function 'message) #'ignore))
+        (unwind-protect
+            (progn
+              (canvas-browser-show-hidden-pages)
+              (should (canvas-browser--buffer-of-target "H1"))
+              (should (canvas-browser--buffer-of-target "H2"))
+              (should-not (canvas-browser--buffer-of-target "W1"))
+              (should (= 1 (cl-count-if (lambda (b) (equal (buffer-local-value 'canvas-browser--target b) mine))
+                                        (buffer-list)))))
+          (canvas-browser-test--kill-target "H1")
+          (canvas-browser-test--kill-target "H2"))))))
 
 (ert-deftest canvas-browser-a-window-that-closes-itself-takes-its-buffer ()
   ;; GIVEN a window a page opened, in a buffer of its own
@@ -3445,10 +3541,11 @@ The window manager says so on the root window, where Emacs reads it."
     (should (string-prefix-p " *canvas-browser embed: a video*" (buffer-name)))))
 
 (ert-deftest canvas-browser-a-page-that-is-not-ours-changes-nothing ()
-  ;; GIVEN a page buffer
+  ;; GIVEN a page buffer, and the pages no page of Emacs opened left alone
   ;; WHEN chromium tells of a new address of a page nobody here shows
   ;; THEN this buffer keeps its name and its address
   (canvas-browser-test--in-page
+    (setq-local canvas-browser-show-strays nil)
     (let ((name (buffer-name)))
       (canvas-browser--target-changed
        (list :targetInfo (list :targetId "SOMEONE-ELSE" :type "page"
@@ -4992,7 +5089,12 @@ Return the dired buffer in which they are picked."
   ;;      and in the menu alike
   (canvas-browser-test--in-page
     (should (eq 'canvas-browser-bookmark (key-binding (kbd "B"))))
-    (should (eq 'canvas-browser-open-bookmark (key-binding (kbd "J")))))
+    (should (eq 'canvas-browser-open-bookmark (key-binding (kbd "J"))))
+    (should (eq 'canvas-browser-list-bookmarks (key-binding (kbd "b")))))
+  (should (eq 'canvas-browser-list-bookmarks
+              (plist-get (canvas-browser-test--menu-entry "b") :command)))
+  (should (eq 'canvas-browser-back
+              (plist-get (canvas-browser-test--menu-entry "M-p") :command)))
   (should (eq 'canvas-browser-bookmark
               (plist-get (canvas-browser-test--menu-entry "B") :command)))
   (should (eq 'canvas-browser-open-bookmark
