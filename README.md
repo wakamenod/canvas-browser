@@ -274,7 +274,7 @@ Normal state keeps the keys of Emacs:
 | `<home>`, `<end>`, `C-<home>`, `C-<end>`, `M-<`, `M->` | go to the top and the foot of the page |
 | `f` | labels what a click can reach, fields inside web components included, and clicks the one you name; the labels stay until you name one or press `ESC` |
 | `M-w` | labels the blocks of the page, and copies the picture of the one you name; `C-u M-w` copies the whole window |
-| `S` | labels the parts of the page that scroll on their own, and sends the scroll keys to the one you name |
+| `S` | labels the parts of the page that scroll on their own, and sends the scroll keys to the one you name; a page that does not scroll as a whole, as Notion does not, has its largest such part scrolled without it |
 | `v` | moves a caret through the text of the page with the motions of Emacs |
 | `M-j` | puts the caret on text you type, as `avy-goto-char-timer` puts point |
 | `TAB`, `S-TAB` | go to the next and the previous field, and type there |

@@ -1881,6 +1881,18 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
       (should (string-search (format "(1, 'by', %d)" canvas-browser-line-height) expression))
       (should-not (string-search "window.scrollBy" expression)))))
 
+(ert-deftest canvas-browser-a-page-that-does-not-scroll-scrolls-its-largest-part ()
+  ;; GIVEN a page buffer with no part picked
+  ;; WHEN a line is scrolled
+  ;; THEN the page scrolls as a whole when it can, AND otherwise the
+  ;;      largest part in view that scrolls, as Notion's text does
+  (canvas-browser-test--in-page
+    (canvas-browser-scroll-line-up)
+    (let ((expression (plist-get (canvas-browser-test--params "Runtime.evaluate") :expression)))
+      (should (string-search (format "window.scrollBy(0, %d)" canvas-browser-line-height) expression))
+      (should (string-search "root.scrollHeight > innerHeight" expression))
+      (should (string-search (format "('by', %d)" canvas-browser-line-height) expression)))))
+
 (ert-deftest canvas-browser-forgets-a-part-that-is-gone ()
   ;; GIVEN a page whose picked part has gone, after a click or a new page
   ;; WHEN a line is scrolled

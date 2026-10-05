@@ -1441,6 +1441,31 @@ the page that scrolls on its own scrolls when the pointer is over it."
 The page holds the parts themselves in an array of its own, and this is
 the place of one of them there.")
 
+(defconst canvas-browser--scroll-page-script
+  "(function (mode, value) {
+     const root = document.scrollingElement || document.documentElement;
+     const shut = e => !!e && ['hidden', 'clip'].includes(getComputedStyle(e).overflowY);
+     if (root.scrollHeight > innerHeight + 1 &&
+         !shut(document.documentElement) && !shut(document.body)) { %s; return; }
+     let best = null, most = 0;
+     for (const e of document.querySelectorAll('*')) {
+       if (e.scrollHeight <= e.clientHeight + 1) continue;
+       if (!['auto', 'scroll', 'overlay'].includes(getComputedStyle(e).overflowY)) continue;
+       const r = e.getBoundingClientRect();
+       const area = Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0)) *
+                    Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0));
+       if (area > most) { most = area; best = e; }
+     }
+     if (!best) return;
+     if (mode === 'by') best.scrollBy(0, value);
+     else if (mode === 'end') best.scrollTo(0, best.scrollHeight);
+     else best.scrollTo(0, value);
+   })('%s', %d)"
+  "The JavaScript that scrolls the page, by the expression it is given.
+A page that does not scroll as a whole, such as Notion, scrolls a part
+of itself instead, and the scroll keys move the largest part in view
+that scrolls, as `S\=' would have them move it.")
+
 (defun canvas-browser--scroll (mode value expression)
   "Scroll the picked part of the page, or all of it.
 MODE and VALUE say how the part moves, and EXPRESSION is the JavaScript
@@ -1450,7 +1475,10 @@ and a key that does nothing for a second reads as a key that does nothing
 at all."
   (if canvas-browser--scroller
       (canvas-browser--scroll-part mode value)
-    (canvas-browser--tell "Runtime.evaluate" (list :expression expression))))
+    (canvas-browser--tell "Runtime.evaluate"
+                          (list :expression (format canvas-browser--scroll-page-script
+                                                    expression mode value)))))
+
 
 (defun canvas-browser--scroll-by (delta)
   "Scroll DELTA pixels, further down for a positive DELTA."
