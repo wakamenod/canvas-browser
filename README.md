@@ -350,6 +350,7 @@ Normal state keeps the keys of Emacs:
 | a click | clicks the page at that pixel, and types there if it is a field |
 | a drag | marks what lies between its two ends, once the button is let go |
 | the wheel | scrolls what lies under the pointer, over a link as well, up and down and across; the keys held go with it, so Figma moves across with Shift and zooms with Control |
+| a pinch | zooms the page, as Control and the wheel do, and leaves the text of Emacs at its size |
 | a click on a tab, its `×`, the `+` | shows that page, kills it, and opens a new page in this window |
 
 The scroll keys move the page itself, which happens at once. The wheel

@@ -911,6 +911,27 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
     (canvas-browser-wheel (canvas-browser-test--wheel-event 'C-wheel-up 50 60))
     (should (= (plist-get (canvas-browser-test--params "Input.dispatchMouseEvent") :modifiers) 2))))
 
+(ert-deftest canvas-browser-a-pinch-zooms-the-page-and-not-the-text ()
+  ;; GIVEN a page buffer, as Figma, that zooms by the wheel with Control
+  ;; WHEN the trackpad pinches out from 1.0 to 1.2, and then in to 1.1
+  ;; THEN the page is turned up and then down with Control held, by the
+  ;;      change of each step, AND the text of Emacs keeps its size
+  (canvas-browser-test--in-page
+    (should (eq (key-binding [pinch]) #'canvas-browser-pinch))
+    (let ((turns nil))
+      (cl-letf (((symbol-function 'canvas-browser--wheel)
+                 (lambda (_x _y delta across modifiers)
+                   (push (list delta across modifiers) turns))))
+        (dolist (step '((0.0 0.0 1.0 0.0) (0.5 0.0 1.2 0.0) (0.2 0.0 1.1 0.0)))
+          (canvas-browser-pinch
+           (append (list 'pinch (cadr (canvas-browser-test--wheel-event 'pinch 30 40))) step))))
+      (setq turns (nreverse turns))
+      (should (= 2 (length turns)))
+      (should (< (car (nth 0 turns)) 0))
+      (should (> (car (nth 1 turns)) 0))
+      (should (equal '(0 2) (cdr (nth 0 turns))))
+      (should-not (bound-and-true-p text-scale-mode)))))
+
 (ert-deftest canvas-browser-the-wheel-command-takes-only-a-turn-of-the-wheel ()
   ;; GIVEN a page buffer
   ;; WHEN the wheel command is handed a click instead of a turn

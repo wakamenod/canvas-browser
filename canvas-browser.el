@@ -1705,6 +1705,28 @@ The page under the pointer scrolls, though another window is selected."
                                (pcase turn ('wheel-left (- step)) ('wheel-right step) (_ 0))
                                (canvas-browser--modifier-bits (event-modifiers event)))))))
 
+(defvar-local canvas-browser--pinch-scale 1.0
+  "The scale the pinch had at its last event, since its fingers came down.")
+
+(defun canvas-browser-pinch (event)
+  "Zoom the page under EVENT, a pinch of the trackpad, as a browser does.
+A browser hands a pinch to the page as a turn of the wheel with Control
+held, and a page as Figma zooms by it; the text of Emacs keeps its size.
+The pinch says its scale since the fingers came down, so each event
+turns the wheel by the change since the one before."
+  (interactive "e")
+  (let* ((scale (nth 4 event))
+         (start (and (zerop (nth 2 event)) (zerop (nth 3 event)) (zerop (nth 5 event))))
+         (at (posn-object-x-y (event-start event))))
+    (with-current-buffer (canvas-browser--event-buffer event)
+      (when start
+        (setq canvas-browser--pinch-scale 1.0))
+      (when (and (numberp scale) (> scale 0) (/= scale canvas-browser--pinch-scale))
+        (canvas-browser--wheel (car at) (cdr at)
+                               (* -100 (log (/ scale canvas-browser--pinch-scale)))
+                               0 2)
+        (setq canvas-browser--pinch-scale scale)))))
+
 (defconst canvas-browser--takes-typing-js
   "const takesTyping = e => !!e && (e.isContentEditable || e.tagName === 'TEXTAREA' ||
      (e.tagName === 'INPUT' &&
@@ -3749,6 +3771,7 @@ triple event."
       (dolist (direction '("down" "up" "left" "right"))
         (define-key map (vector (intern (format "%s%swheel-%s" held turn direction)))
                     #'canvas-browser-wheel))))
+  (define-key map [pinch] #'canvas-browser-pinch)
   (define-key map [drag-mouse-1] #'canvas-browser-drag)
   (canvas-browser--bind-clicks map #'canvas-browser-click))
 
