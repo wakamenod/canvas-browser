@@ -427,6 +427,43 @@ Nothing of the virtual display is left from before, nor after."
       (canvas-browser-cdp--ensure-virtual-display)
       (should (eq canvas-browser-cdp--display-process process)))))
 
+(ert-deftest canvas-browser-cdp-the-display-is-read-while-a-tls-connection-shakes-hands ()
+  ;; GIVEN a TLS connection of another, still shaking hands, whose
+  ;;       server sends something it does not read yet, as the fetch of
+  ;;       an icon does at startup
+  ;; WHEN the virtual display is had
+  ;; THEN Emacs comes back with it at once, AND does not go round and
+  ;;      round reading the connection
+  (skip-unless (gnutls-available-p))
+  (canvas-browser-cdp-test--with-display-program "sleep 0.3; echo 3440 1440 1920 1200; cat"
+    (let* ((server (make-network-process
+                    :name "canvas-browser-test-tls-server" :server t
+                    :host 'local :service t :noquery t
+                    :log (lambda (_server connection _message)
+                           (run-at-time 0.1 nil #'process-send-string
+                                        connection "\x16\x03\x03\x00\x05hello"))))
+           (client (open-network-stream
+                    "canvas-browser-test-tls" nil "127.0.0.1"
+                    (process-contact server :service)
+                    :type 'tls :nowait t))
+           (timer nil)
+           (start (float-time)))
+      (unwind-protect
+          (should
+           (eq 'had
+               (catch 'canvas-browser-cdp-test--stuck
+                 ;; A timer runs while Emacs goes round, and gets it out.
+                 (setq timer (run-at-time 2 nil #'throw
+                                          'canvas-browser-cdp-test--stuck 'stuck))
+                 (canvas-browser-cdp--ensure-virtual-display)
+                 'had)))
+        (cancel-timer timer)
+        (delete-process client)
+        (delete-process server))
+      (should (< (- (float-time) start) 2))
+      (should (equal canvas-browser-cdp--virtual-display
+                     '(:left 3440 :top 1440 :width 1920 :height 1200))))))
+
 (ert-deftest canvas-browser-cdp-without-the-program-windows-go-past-the-corner ()
   ;; GIVEN no program of the virtual display, as before `make display'
   ;; WHEN the display is to be had, twice
