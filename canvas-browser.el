@@ -3847,10 +3847,21 @@ Its title and icon show at once; the page itself is read again."
     buffer))
 
 (defun canvas-browser-new-tab ()
-  "Open a page in a new tab, in this window, as `+' of the tabs does."
+  "Open a page you kept, or a URL, in a new tab, in this window, as `+'
+of the tabs does; see `canvas-browser-open-bookmark-or-url'."
   (interactive)
+  (canvas-browser--let-go-of-the-click)
   (let ((display-buffer-overriding-action '(display-buffer-same-window)))
-    (call-interactively #'canvas-browser)))
+    (call-interactively #'canvas-browser-open-bookmark-or-url)))
+
+(defun canvas-browser--let-go-of-the-click ()
+  "Take the release of the button that this command was pressed with.
+tab-line runs `+' as the button goes down, so the release would come
+to the minibuffer as a click on the tabs, select the page's window, and
+leave the question."
+  (when (memq 'down (event-modifiers last-input-event))
+    (while (when-let* ((event (read-event nil nil 1)))
+             (not (seq-intersection '(click drag) (event-modifiers event)))))))
 
 (defun canvas-browser--tab-choices ()
   "The tabs as choices to read, each its title and address, with its buffer.
@@ -4619,13 +4630,38 @@ embark treat them as they treat any bookmark."
   (bookmark-maybe-load-default-file)
   (let ((names (or (canvas-browser--bookmark-names)
                    (user-error "canvas-browser: no page is bookmarked yet; B keeps this one"))))
-    (bookmark-jump
-     (completing-read "Page: "
-                      (lambda (string predicate action)
-                        (if (eq action 'metadata)
-                            '(metadata (category . bookmark))
-                          (complete-with-action action names string predicate)))
-                      nil t))))
+    (bookmark-jump (canvas-browser--read-bookmark "Page: " names t))))
+
+(defun canvas-browser--read-bookmark (prompt names require-match)
+  "Read one of NAMES, the bookmarks of pages, with PROMPT.
+REQUIRE-MATCH is as in `completing-read'."
+  (completing-read prompt
+                   (lambda (string predicate action)
+                     (if (eq action 'metadata)
+                         '(metadata (category . bookmark))
+                       (complete-with-action action names string predicate)))
+                   nil require-match))
+
+;;;###autoload
+(defun canvas-browser-open-bookmark-or-url (text)
+  "Open the page of the bookmark called TEXT, or else the page at TEXT.
+The bookmarks of pages are offered, and what matches none of them is
+taken as a URL; a URL without a scheme gets one, and words become a
+search.  A page that a buffer shows already goes to that buffer."
+  (interactive
+   (progn
+     (require 'bookmark)
+     (bookmark-maybe-load-default-file)
+     (list (canvas-browser--read-bookmark "Page or URL: " (canvas-browser--bookmark-names) nil))))
+  (when (string-blank-p text)
+    (user-error "canvas-browser: no page or URL given"))
+  (require 'bookmark)
+  (bookmark-maybe-load-default-file)
+  (if (member text (canvas-browser--bookmark-names))
+      (bookmark-jump text)
+    (canvas-browser--restore-tabs-once)
+    (let ((shown (canvas-browser--buffer-showing (canvas-browser--reachable-url text))))
+      (if shown (pop-to-buffer shown) (canvas-browser text)))))
 
 (defun canvas-browser--join-consult-web-group ()
   "Put the bookmarks of pages in the Web group of `consult-bookmark'."

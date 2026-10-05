@@ -206,6 +206,11 @@ and embark treat them as they treat any bookmark. `C-x r m`,
 eww, so `w SPC` narrows to them. A bookmark of a page that a buffer
 shows already goes to that buffer.
 
+`M-x canvas-browser-open-bookmark-or-url` offers the pages you kept as
+`J` does, and opens what matches none of them as a URL, so one command
+serves for both. Words become a search, as with `o`. It works outside a
+page buffer too, so you can bind it to a key of your own.
+
 ### Attaching a file
 
 When you attach a file to a mail, the page asks for the file. A dired
@@ -529,7 +534,8 @@ has given a title.
 
 A click on a tab shows its page in that window. Its `×` kills the page,
 and a window that showed it shows the tab to its right, or to its left
-for the last tab. The `+` asks for a URL and opens it in this window.
+for the last tab. The `+` offers the pages you kept, and opens the one
+you pick, or the URL you type, in this window.
 `C-<next>` and `C-<prior>` go to the next and the previous tab, as
 Control with Page Down and Page Up do in a browser; `C-TAB` stays with
 `tab-bar-mode`. `C-c C-t` reads a tab by its title or address, from a

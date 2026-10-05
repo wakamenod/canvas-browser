@@ -4815,6 +4815,59 @@ Return the dired buffer in which they are picked."
           (should (eq page (current-buffer)))))
       (should (equal '(("Example") bookmark) offered)))))
 
+(ert-deftest canvas-browser-open-bookmark-or-url-opens-a-bookmark ()
+  ;; GIVEN a bookmark of a page that a buffer shows
+  ;; WHEN its name is picked from the pages offered
+  ;; THEN that buffer is the one shown, AND no page opens
+  (canvas-browser-test--in-page
+    (let ((page (current-buffer))
+          (bookmark-alist (list (canvas-browser-test--bookmark "Example" "https://example.org")))
+          (offered nil))
+      (setq canvas-browser-test--commands nil)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt collection _predicate require-match &rest _)
+                   (setq offered (list (all-completions "" collection) require-match))
+                   "Example")))
+        (with-temp-buffer
+          (call-interactively #'canvas-browser-open-bookmark-or-url)
+          (should (eq page (current-buffer)))))
+      (should (equal '(("Example") nil) offered))
+      (should-not (assoc "Target.createTarget" canvas-browser-test--commands)))))
+
+(ert-deftest canvas-browser-open-bookmark-or-url-opens-what-no-bookmark-is ()
+  ;; GIVEN a bookmark of a page
+  ;; WHEN an address that is no bookmark is given
+  ;; THEN a page buffer opens at that address, given a scheme
+  (canvas-browser-test--with-chromium
+    (let ((bookmark-alist (list (canvas-browser-test--bookmark "Example" "https://example.org")))
+          (opened nil))
+      (unwind-protect
+          (progn
+            (setq opened (canvas-browser-open-bookmark-or-url "example.com/b"))
+            (should (eq 'canvas-browser-mode (buffer-local-value 'major-mode opened)))
+            (should (equal "https://example.com/b" (buffer-local-value 'canvas-browser--url opened))))
+        (when (buffer-live-p opened) (kill-buffer opened))))))
+
+(ert-deftest canvas-browser-open-bookmark-or-url-goes-to-an-address-already-open ()
+  ;; GIVEN a page buffer that shows an address that is no bookmark
+  ;; WHEN that address is given
+  ;; THEN that buffer is the one shown, AND no page opens
+  (canvas-browser-test--in-page
+    (let ((page (current-buffer))
+          (bookmark-alist nil))
+      (setq canvas-browser-test--commands nil)
+      (with-temp-buffer
+        (canvas-browser-open-bookmark-or-url "example.org")
+        (should (eq page (current-buffer))))
+      (should-not (assoc "Target.createTarget" canvas-browser-test--commands)))))
+
+(ert-deftest canvas-browser-open-bookmark-or-url-wants-something ()
+  ;; GIVEN nothing typed
+  ;; WHEN it is given to open
+  ;; THEN it is a user error rather than a page of nothing
+  (let ((bookmark-alist nil))
+    (should-error (canvas-browser-open-bookmark-or-url "  ") :type 'user-error)))
+
 (ert-deftest canvas-browser-bookmark-keys ()
   ;; GIVEN a page buffer and its menu
   ;; WHEN B and J are looked up
@@ -5032,13 +5085,26 @@ They are killed afterwards, and the icons known are forgotten."
 (ert-deftest canvas-browser-a-new-tab-opens-in-the-same-window ()
   ;; GIVEN one window
   ;; WHEN the + of the tabs opens a page
-  ;; THEN `canvas-browser' is asked for it in this window, not another
+  ;; THEN a page you kept or a URL is asked for, in this window, not another
   (let (action)
-    (cl-letf (((symbol-function 'canvas-browser)
-               (lambda (_url) (interactive (list "e.org"))
+    (cl-letf (((symbol-function 'canvas-browser-open-bookmark-or-url)
+               (lambda (_text) (interactive (list "e.org"))
                  (setq action display-buffer-overriding-action))))
       (canvas-browser-new-tab))
     (should (equal action '(display-buffer-same-window)))))
+
+(ert-deftest canvas-browser-a-new-tab-takes-the-release-of-its-click ()
+  ;; GIVEN + pressed with the button, whose release is still to come
+  ;; WHEN the new tab asks for a page
+  ;; THEN the release is taken first, so it does not leave the question
+  (let ((last-input-event '(down-mouse-1 (nil tab-line (0 . 0) 0)))
+        (unread-command-events (list '(mouse-1 (nil tab-line (0 . 0) 0))))
+        pending)
+    (cl-letf (((symbol-function 'canvas-browser-open-bookmark-or-url)
+               (lambda (_text) (interactive (list "e.org"))
+                 (setq pending unread-command-events))))
+      (canvas-browser-new-tab))
+    (should-not pending)))
 
 ;;;; The icons of the pages
 
