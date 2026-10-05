@@ -1551,12 +1551,35 @@ The key is `y\=', which copies the address of a link after `f\=' as well.
   (kill-new canvas-browser--url)
   (message "canvas-browser: copied %s" canvas-browser--url))
 
-(defun canvas-browser--wheel (x y delta)
+(defun canvas-browser--wheel (x y delta &optional across modifiers)
   "Turn the wheel DELTA pixels at the page pixel X Y, down for a positive one.
-Chromium sends the turn to whatever lies under that pixel, so a part of
-the page that scrolls on its own scrolls when the pointer is over it."
+ACROSS turns it as many pixels to the right, or to the left for a
+negative one, and MODIFIERS, the bits of `canvas-browser--modifier-bits\=',
+are the keys held.  Chromium sends the turn to whatever lies under that
+pixel, so a part of the page that scrolls on its own scrolls when the
+pointer is over it, and a page that draws on a canvas, as Figma, moves
+it as it likes: Shift and the wheel across, Control and the wheel zoom."
   (canvas-browser--tell "Input.dispatchMouseEvent"
-                        (list :type "mouseWheel" :x x :y y :deltaX 0 :deltaY delta)))
+                        (list :type "mouseWheel" :x x :y y
+                              :deltaX (or across 0) :deltaY delta
+                              :modifiers (or modifiers 0))))
+
+(defun canvas-browser--modifier-bits (modifiers)
+  "The bits chromium reads for MODIFIERS, the modifiers of an event of Emacs.
+Chromium counts Alt as 1, Control as 2, Meta, which is Command on a Mac,
+as 4, and Shift as 8.  On a Mac Emacs names Command and Option as
+`ns-command-modifier\=' and `ns-option-modifier\=' say; elsewhere meta is
+Alt and super is the Meta of chromium."
+  (let* ((command (if (boundp 'ns-command-modifier) ns-command-modifier 'super))
+         (option (if (boundp 'ns-option-modifier) ns-option-modifier 'meta))
+         (bits 0))
+    (dolist (modifier modifiers bits)
+      (setq bits (logior bits
+                         (cond ((eq modifier 'shift) 8)
+                               ((eq modifier 'control) 2)
+                               ((eq modifier command) 4)
+                               ((eq modifier option) 1)
+                               (t 0)))))))
 
 (defvar-local canvas-browser--scroller nil
   "The place of the part of the page the scroll keys move, or nil for all of it.
@@ -1672,14 +1695,15 @@ a fast turn as a double or a triple event, and each one scrolls a line.
 The page under the pointer scrolls, though another window is selected."
   (interactive "e")
   (let ((turn (event-basic-type event)))
-    (cl-assert (memq turn '(wheel-up wheel-down)) nil
+    (cl-assert (memq turn '(wheel-up wheel-down wheel-left wheel-right)) nil
                "canvas-browser: %S is not a turn of the wheel" turn)
-    (let ((at (posn-object-x-y (event-start event))))
+    (let ((at (posn-object-x-y (event-start event)))
+          (step canvas-browser-line-height))
       (with-current-buffer (canvas-browser--event-buffer event)
         (canvas-browser--wheel (car at) (cdr at)
-                               (if (eq turn 'wheel-up)
-                                   (- canvas-browser-line-height)
-                                 canvas-browser-line-height))))))
+                               (pcase turn ('wheel-up (- step)) ('wheel-down step) (_ 0))
+                               (pcase turn ('wheel-left (- step)) ('wheel-right step) (_ 0))
+                               (canvas-browser--modifier-bits (event-modifiers event)))))))
 
 (defconst canvas-browser--takes-typing-js
   "const takesTyping = e => !!e && (e.isContentEditable || e.tagName === 'TEXTAREA' ||
@@ -3716,12 +3740,15 @@ rather than telling the reader that it is undefined."
 
 (defun canvas-browser--bind-mouse (map)
   "Bind the mouse in MAP.
-A click reaches the page, a drag marks in it, and the wheel scrolls it.
-Emacs reports a fast wheel turn as a double or triple event."
-  (dolist (turn '("" "double-" "triple-"))
-    (dolist (direction '("down" "up"))
-      (define-key map (vector (intern (format "%swheel-%s" turn direction)))
-                  #'canvas-browser-wheel)))
+A click reaches the page, a drag marks in it, and the wheel scrolls it,
+up and down and across, with the keys held: a page as Figma reads Shift
+or Control with it.  Emacs reports a fast wheel turn as a double or
+triple event."
+  (dolist (held '("" "S-" "C-" "M-" "s-" "A-" "C-S-" "M-S-"))
+    (dolist (turn '("" "double-" "triple-"))
+      (dolist (direction '("down" "up" "left" "right"))
+        (define-key map (vector (intern (format "%s%swheel-%s" held turn direction)))
+                    #'canvas-browser-wheel))))
   (define-key map [drag-mouse-1] #'canvas-browser-drag)
   (canvas-browser--bind-clicks map #'canvas-browser-click))
 

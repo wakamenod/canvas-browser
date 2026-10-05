@@ -889,6 +889,28 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
       (should (equal (plist-get event :x) 10))
       (should (< (plist-get event :deltaY) 0)))))
 
+(ert-deftest canvas-browser-the-wheel-turns-across-and-with-the-keys-held ()
+  ;; GIVEN a page buffer, as Figma, that reads the wheel itself
+  ;; WHEN the wheel turns right, and down with Shift held, and up with
+  ;;      Control held
+  ;; THEN the page is turned across for the first, AND told of Shift and
+  ;;      of Control for the others, by the bits chromium reads
+  (canvas-browser-test--in-page
+    (should (eq (key-binding [wheel-right]) #'canvas-browser-wheel))
+    (should (eq (key-binding [S-wheel-down]) #'canvas-browser-wheel))
+    (should (eq (key-binding [C-double-wheel-up]) #'canvas-browser-wheel))
+    (canvas-browser-wheel (canvas-browser-test--wheel-event 'wheel-right 50 60))
+    (let ((event (canvas-browser-test--params "Input.dispatchMouseEvent")))
+      (should (> (plist-get event :deltaX) 0))
+      (should (= (plist-get event :deltaY) 0))
+      (should (= (plist-get event :modifiers) 0)))
+    (canvas-browser-wheel (canvas-browser-test--wheel-event 'S-wheel-down 50 60))
+    (let ((event (canvas-browser-test--params "Input.dispatchMouseEvent")))
+      (should (> (plist-get event :deltaY) 0))
+      (should (= (plist-get event :modifiers) 8)))
+    (canvas-browser-wheel (canvas-browser-test--wheel-event 'C-wheel-up 50 60))
+    (should (= (plist-get (canvas-browser-test--params "Input.dispatchMouseEvent") :modifiers) 2))))
+
 (ert-deftest canvas-browser-the-wheel-command-takes-only-a-turn-of-the-wheel ()
   ;; GIVEN a page buffer
   ;; WHEN the wheel command is handed a click instead of a turn
