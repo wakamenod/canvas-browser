@@ -839,7 +839,53 @@ second one with an error that it is active already."
          (with-current-buffer buffer (canvas-browser--frame-navigated params)))))
     (canvas-browser-cdp-listen
      canvas-browser--session "Page.fileChooserOpened"
-     (canvas-browser--here #'canvas-browser--file-chooser-opened))))
+     (canvas-browser--here #'canvas-browser--file-chooser-opened))
+    (canvas-browser-cdp-listen
+     canvas-browser--session "Inspector.targetCrashed"
+     (lambda (params)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer (canvas-browser--crashed params)))))))
+
+(defcustom canvas-browser-crash-retries 2
+  "Times a page that crashed is read again before it is left to you.
+The count starts afresh each time the page loads."
+  :type 'integer
+  :group 'canvas-browser)
+
+(defvar-local canvas-browser--asked-url nil
+  "The address this page was last sent to, whether or not it got there.")
+
+(defvar-local canvas-browser--crashes 0
+  "How many times this page crashed since it last loaded.")
+
+(defun canvas-browser--crashed (_params)
+  "Read the page again, which crashed before or after it loaded.
+The process that draws a page can die at the start of a navigation, as
+it does at times for a link of Notion.  The page is then blank, and every
+picture asked of it is refused with \"Internal error\".  A navigation
+starts a new process, so the address that was asked for is gone to again:
+the page itself may know no address yet, if it died before it had one."
+  (let ((url (if (and canvas-browser--url
+                      (not (member canvas-browser--url '("" "about:blank"))))
+                 canvas-browser--url
+               canvas-browser--asked-url)))
+    (if (and url (< canvas-browser--crashes canvas-browser-crash-retries))
+        (progn
+          (cl-incf canvas-browser--crashes)
+          (message "canvas-browser: the page crashed; reading it again")
+          ;; The screencast of the dead process is gone with it, and one
+          ;; asked for before the new process is up is refused as
+          ;; \"Target crashed\": it is asked for once the navigation
+          ;; has started.
+          (let ((buffer (current-buffer)))
+            (canvas-browser--tell
+             "Page.navigate" (list :url url)
+             (lambda (_result)
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (setq canvas-browser--screencast nil)
+                   (canvas-browser--start-screencast)))))))
+      (message "canvas-browser: the page crashed; r reads it again"))))
 
 (defun canvas-browser--frame-navigated (params)
   "Take PARAMS of the event that says a frame of this page navigated.
@@ -855,6 +901,7 @@ after a restore of the page itself.  A navigation to a new page keeps it."
   "Ask the page that has loaded for its title and its icon, for the tabs.
 Chromium names a page after its file until the page changes address
 again, whatever the page calls itself."
+  (setq canvas-browser--crashes 0)
   (let ((buffer (current-buffer)))
     (canvas-browser--evaluate
      "document.title"
@@ -916,6 +963,7 @@ quiet, since it is looked for."
   (when canvas-browser--host
     (canvas-browser--watch-fullscreen))
   (when url
+    (setq canvas-browser--asked-url url)
     (canvas-browser--tell "Page.navigate" (list :url url)))
   (canvas-browser--start-screencast))
 
@@ -1838,7 +1886,8 @@ in this buffer; what matches none of them is taken as a URL."
   (interactive (list (canvas-browser--read-page-or-url)))
   (when (string-blank-p url)
     (user-error "canvas-browser: no page or URL given"))
-  (setq canvas-browser--url (canvas-browser--reachable-url url))
+  (setq canvas-browser--url (canvas-browser--reachable-url url)
+        canvas-browser--asked-url canvas-browser--url)
   (canvas-browser--tell "Page.navigate" (list :url canvas-browser--url)))
 
 ;;;; Link hints

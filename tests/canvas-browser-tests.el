@@ -80,6 +80,35 @@ that moment now."
       (should (equal (plist-get screencast :format) "jpeg"))
       (should (equal (plist-get screencast :maxWidth) 800)))))
 
+(ert-deftest canvas-browser-a-page-that-crashed-is-read-again-at-its-address ()
+  ;; GIVEN a page that crashed before it had an address of its own
+  ;; WHEN chromium says it crashed
+  ;; THEN the address that was asked for is navigated to again,
+  ;;      AND the screencast starts again
+  (canvas-browser-test--in-page
+    (setq canvas-browser--url "")
+    (setq canvas-browser-test--commands nil)
+    (canvas-browser-test--event "Inspector.targetCrashed" nil)
+    (should (equal (plist-get (canvas-browser-test--params "Page.navigate") :url)
+                   "https://example.org"))
+    (should (assoc "Page.startScreencast" canvas-browser-test--commands))))
+
+(ert-deftest canvas-browser-a-page-that-keeps-crashing-is-left-alone ()
+  ;; GIVEN a page that crashed as often as it is read again
+  ;; WHEN it crashes once more
+  ;; THEN it is not read again, until it loads and the count starts afresh
+  (canvas-browser-test--in-page
+    (dotimes (_ canvas-browser-crash-retries)
+      (canvas-browser-test--event "Inspector.targetCrashed" nil))
+    (setq canvas-browser-test--commands nil)
+    (canvas-browser-test--event "Inspector.targetCrashed" nil)
+    (should-not (assoc "Page.navigate" canvas-browser-test--commands))
+    (cl-letf (((symbol-function 'canvas-browser--evaluate) #'ignore)
+              ((symbol-function 'canvas-browser--find-icon) #'ignore))
+      (canvas-browser--loaded nil))
+    (canvas-browser-test--event "Inspector.targetCrashed" nil)
+    (should (assoc "Page.navigate" canvas-browser-test--commands))))
+
 (ert-deftest canvas-browser-a-frame-is-painted-and-acknowledged ()
   ;; GIVEN a page buffer
   ;; WHEN a screencast frame arrives
