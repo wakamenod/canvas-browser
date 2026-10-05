@@ -457,6 +457,33 @@ view, so chromium is not left with them."
       (message "canvas-browser: the virtual display went away; chromium is stopped")
       (canvas-browser-cdp-stop))))
 
+;; DEBUG(spin): temporary, to learn why the wait below outlives its
+;; deadline.  Remove once that is known.
+(defvar canvas-browser-cdp--debug-wait-file
+  (expand-file-name "~/canvas-browser-wait.log"))
+
+(defun canvas-browser-cdp--debug-wait (what process buffer deadline n got slowest)
+  "Append the state of the wait for the virtual display to a file.
+WHAT says where; PROCESS, BUFFER and DEADLINE are the wait's.  N is the
+times round, GOT how many of them read output, SLOWEST the longest
+`accept-process-output' since the last line."
+  (ignore-errors
+    (let* ((now (float-time))
+           (text (and (buffer-live-p buffer)
+                      (with-current-buffer buffer (buffer-string))))
+           (ripe (let ((count 0))
+                   (dolist (timer timer-list count)
+                     (when (time-less-p (timer--time timer) nil)
+                       (setq count (1+ count))))))
+           (line (format "%s %-12s now=%.3f deadline=%.3f left=%.3f n=%d got=%d slowest=%.3f status=%S pid=%S text=%S cur=%S timeout=%S timers=%d ripe=%d\n"
+                         (format-time-string "%F %T.%3N")
+                         what now deadline (- deadline now) n got slowest
+                         (process-status process) (process-id process)
+                         text (buffer-name (current-buffer))
+                         canvas-browser-cdp-timeout
+                         (length timer-list) ripe)))
+      (write-region line nil canvas-browser-cdp--debug-wait-file t 'silent))))
+
 (defun canvas-browser-cdp--run-display ()
   "Start the program of the virtual display and read where the display is.
 Signal an error that says why, when it cannot."
@@ -479,10 +506,25 @@ Signal an error that says why, when it cannot."
                      (with-current-buffer buffer
                        (string-search "\n" (buffer-string))))))
       (setq canvas-browser-cdp--display-process process)
-      (while (and (process-live-p process)
-                  (not (funcall line-p))
-                  (< (float-time) deadline))
-        (accept-process-output process 0.05))
+      ;; DEBUG(spin): temporary; see `canvas-browser-cdp--debug-wait'.
+      (let ((n 0) (got 0) (last-log 0.0) (slowest 0.0)
+            (start (float-time)))
+        (canvas-browser-cdp--debug-wait "enter" process buffer deadline 0 0 0.0)
+        (while (and (process-live-p process)
+                    (not (funcall line-p))
+                    (< (float-time) deadline))
+          (let ((t0 (float-time)))
+            (when (accept-process-output process 0.05)
+              (setq got (1+ got)))
+            (setq slowest (max slowest (- (float-time) t0))))
+          (setq n (1+ n))
+          (when (>= (- (float-time) last-log) 1.0)
+            (setq last-log (float-time))
+            (canvas-browser-cdp--debug-wait
+             (format "loop +%.1fs" (- (float-time) start))
+             process buffer deadline n got slowest)
+            (setq slowest 0.0)))
+        (canvas-browser-cdp--debug-wait "exit" process buffer deadline n got slowest))
       (condition-case failure
           (setq canvas-browser-cdp--virtual-display
                 (canvas-browser-cdp--read-display
