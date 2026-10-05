@@ -59,9 +59,10 @@ profile of a snap chromium goes to
 Another chromium keeps its profile under your cache directory. The
 profile holds the cookies, so a site stays logged in between sessions.
 A snap also has a `/tmp` of its own and reads no hidden directory of your
-home, so a local page it cannot read, such as one another package wrote
-to `/tmp`, is copied to `~/snap/chromium/common/canvas-browser-files`
-before it opens. Only that file is copied.
+home, so a local file it cannot read, such as a page another package
+wrote to `/tmp` or a file you attach to a mail, is copied to
+`~/snap/chromium/common/canvas-browser-files` first. Only that file is
+copied.
 
 ## Install
 
@@ -112,14 +113,12 @@ Mac with Homebrew, from nothing.
    xcode-select --install    # clang, and the Swift of the display
    ```
 
-3. **The clones and the builds.** The Makefile of canvas-diagram looks
-   for `emacs-module.h` in `/usr/local/include`, and Homebrew puts it in
-   its own prefix, so the flags name that too:
+3. **The clones and the builds.** Clone the three as in
+   [Install](#install), canvas-browser from the fork. The Makefile of
+   canvas-diagram looks for `emacs-module.h` in `/usr/local/include`,
+   and Homebrew puts it in its own prefix, so the flags name that too:
 
    ```sh
-   git clone https://github.com/Daskeladden/canvas-keys.git
-   git clone https://github.com/Daskeladden/canvas-diagram.git
-   git clone https://github.com/wakamenod/canvas-browser.git
    make -C canvas-diagram \
      CFLAGS="-O2 -Wall -Wextra -std=gnu11 -fPIC -I$(brew --prefix)/include"
    make -C canvas-browser display
@@ -140,11 +139,7 @@ Mac with Homebrew, from nothing.
 
    A new profile of Brave fetches its lists of ads a little after it
    first starts, so ads show until chromium is next started.
-5. **Japanese and other input methods.** They type into a page in
-   insert state. With the
-   [inline patch](https://github.com/takaxp/ns-inline-patch) the text
-   being converted shows in the field of the page.
-6. **Extensions from the Chrome Web Store.** Its dialog that adds an
+5. **Extensions from the Chrome Web Store.** Its dialog that adds an
    extension is drawn by the browser on the display nobody sees, so it
    cannot be clicked from a page. Add the extension to the profile of
    canvas-browser in a browser on your own screen instead:
@@ -200,7 +195,9 @@ so they come first. `package-vc` runs the build of a package only when
 
 `M-x canvas-browser` asks for a URL and opens it in a buffer. The page is
 laid out for the window, and chromium sends a picture whenever the page
-changes. The picture is a JPEG, painted on the canvas.
+changes. The picture is a JPEG, painted on the canvas. A page that stops
+answering for a few seconds says so in the echo area, and `r` reads it
+again.
 
 ### As the browser of Emacs
 
@@ -242,8 +239,7 @@ shows already goes to that buffer.
 `J` does, and opens what matches none of them as a URL, so one command
 serves for both. Words, or a word with no dot, become a search. It
 opens a page buffer of its own, and works outside a page buffer too, so
-you can bind it to a key of your own. `o` asks the same question, and
-opens the answer in this buffer.
+you can bind it to a key of your own.
 
 ### Attaching a file
 
@@ -252,8 +248,7 @@ buffer then opens in the other window, in the directory you last took a
 file from. Mark the files there and press `C-c C-c`, or press it on one
 file. `C-c C-k` tells the page that nothing was chosen. While a page
 waits, the two keys are there in every dired buffer, so you can go to
-another directory first. For a snap chromium, a file that the snap
-cannot read is copied to `~/snap/chromium/common/canvas-browser-files`.
+another directory first.
 
 ### Embark
 
@@ -308,7 +303,7 @@ Normal state keeps the keys of Emacs:
 | `<home>`, `<end>`, `C-<home>`, `C-<end>`, `M-<`, `M->` | go to the top and the foot of the page |
 | `f` | labels what a click can reach, fields inside web components included, and clicks the one you name; the labels stay until you name one or press `ESC` |
 | `M-w` | labels the blocks of the page, and copies the picture of the one you name; `C-u M-w` copies the whole window |
-| `S` | labels the parts of the page that scroll on their own, and sends the scroll keys to the one you name; a page that does not scroll as a whole, as Notion does not, has its largest such part scrolled without it |
+| `S` | labels the parts of the page that scroll on their own, and sends the scroll keys to the one you name |
 | `v` | moves a caret through the text of the page with the motions of Emacs |
 | `M-j` | puts the caret on text you type, as `avy-goto-char-timer` puts point |
 | `TAB`, `S-TAB` | go to the next and the previous field, and type there |
@@ -326,12 +321,13 @@ goes to the page as a wheel, at the pixel the pointer is over, so that it
 scrolls the part of the page that lies there, as it does in any browser.
 
 A page is often more than one thing that scrolls: a list beside the text,
-a pane of its own. `S` labels every such part with the letters of the
-hints and hands the scroll keys to the one you name, the way `ace-window`
-hands the keys to the window you name. The whole page carries the first
-letter itself, in the top corner, so the keys go back to it by a letter
-as well as by `ESC`; so does a part that the page has thrown away, which
-it says when it happens.
+a pane of its own. `S` hands the scroll keys to one of them, the way
+`ace-window` hands the keys to the window you name. The whole page
+carries the first letter itself, in the top corner, so the keys go back
+to it by a letter as well as by `ESC`; so does a part that the page has
+thrown away, which it says when it happens. A page that does not scroll
+as a whole, as Notion does not, has its largest such part scrolled
+without `S`.
 
 The menu shows how the settings stand, with a star for a value that a
 fresh Emacs would not have, and `C-x C-s` in the menu keeps the starred
@@ -352,49 +348,17 @@ lasts. A field inside a web component, as on the login page of Reddit,
 counts as a field: the focus is followed into the component.
 
 The input method of macOS works in insert state, so Japanese and other
-languages it writes can be typed into the page. The buffer is writable
-while insert state lasts, since the input method gives the keys of a
-read-only buffer straight to Emacs; the picture itself stays read-only,
-so a key of Emacs that edits a buffer cannot change it. With the
+languages it writes can be typed into the page. With the
 [inline patch](https://github.com/takaxp/ns-inline-patch) of the input
 method, the text you are still converting shows in the field of the
 page, underlined as in any browser, instead of at the point of the
 buffer, which is out of sight past the picture. Its list of candidates
 still opens at the top right of the window, where Emacs has its cursor.
 
-A hint goes only where a click in the middle of what shows of a thing
-reaches it, or reaches its label. Whatever lies outside the window,
-under a dialog, or around something else that can be clicked, as a link
-around a button does, gets none. On the front page of Reddit that took
-the hints from 388 to 35, and with the login dialog open the page under
-it gets none at all. A click is followed up through the slot a web
-component puts its text in, so a link built that way, as Reddit's
-"Continue with Phone Number" is, counts.
-
-A role counts only where it says the thing does something, as Vimium has
-it: an icon or a heading marked as only looking takes no hint, and
-inside a button it would crowd the button. Nor does a thing of a few
-pixels, as a tracker is. A frame the size of a button counts, since a
-click in it reaches what it holds, as Google's button to sign in is,
-and a taller one is an advertisement and does not. On the page of a
-subreddit that took 9 of 69 labels away, among them the five crowded
-onto the bar that sorts the posts. Past the hints of two letters come
-hints of three, so no box is left without one.
-
-A region the page shows the pointer over counts too, since a script
-that listens for clicks marks one so: the outermost element of it,
-unless it fills half the window. A picture in a post of Reddit opens
-this way, and so does a heading that opens a list. And a thing covered
-by another thing that can be clicked gives its place to that one: the
-link over a post of Reddit covers its title, and takes its hint there.
-Finding the regions costs about 7 ms on the front page of Reddit, whose
-web components hold 13,538 elements, because the search stops inside
-anything that already counts.
-
-A label goes at the top left corner of its box. When two would meet
-there, as a post of Reddit that is a link meets the link of its author,
-the small box keeps the corner and the label of the large one goes in
-its middle, where a click on it lands anyway.
+A hint goes only to what a click in it would reach and what does
+something: whatever lies outside the window or under a dialog gets none,
+and neither does an icon that only looks, or a tracker of a few pixels.
+[docs/design.md](docs/design.md#the-hints) says what counts, and why.
 
 A key pressed before the letters of a hint picks what the hint does, as
 the dispatch keys of avy do, and the prompt names it:
@@ -427,13 +391,6 @@ Whatever a hint copies pulses: smear-cursor plays its copy effect over
 the box of the address, the text or the picture, as it does over text
 copied anywhere in Emacs. `canvas-browser-pulse-function` names what
 pulses, and nil turns it off; without smear-cursor nothing pulses.
-
-A picture is cut in Emacs, with cairo, from a picture of the whole
-window, as much of the block as shows, and goes to the clipboard through
-kill-ring-images. Chromium can cut a part itself, but it does so by
-moving the view of the page to the part, and the view stays moved for a
-while after: every frame and every picture of that while shows the page
-shifted into a corner, or a part of it repeated across the window.
 
 The editing keys of Emacs edit the field, as the Emacs key theme of GTK
 and the insert mode of Surfingkeys have them do:
@@ -468,18 +425,8 @@ the name and the password, and a tab of the browser's own stops there.
 The first and the last field follow one another. A button is reached
 with `f`.
 
-A letter goes to the page as a key that types, so it reaches whatever
-has the focus, as a key pressed in a browser does. Text put in without a
-key lands at the caret instead, and the caret stays behind in a field
-that the focus has left.
-
-A key reaches chromium with the number Windows gives it as well as its
-name, because chromium edits a field by that number: sent by its name
-alone, backspace arrives as an event that deletes nothing.
-
-The search paints every hit in the page itself, with the highlight API of
-CSS, and scrolls to the one you are on. `window.find` answers in a
-headless chromium but leaves nothing to see.
+The search paints every hit in the page itself, and scrolls to the one
+you are on.
 
 The buffer that `T` fills is an ordinary buffer, so isearch,
 `consult-line` and the kill ring work on the text of the page. `T` goes
@@ -515,8 +462,7 @@ whichever stands out, since a white bar alone vanishes on a white page.
 
 ## Jumping to text
 
-`M-j` puts the caret on text you type, as `avy-goto-char-timer` puts
-point. The key that runs `avy-goto-char-timer` does the same in a page,
+The key that runs `avy-goto-char-timer` does what `M-j` does in a page,
 even when `bind-key*` binds it. You type until you pause for `avy-timeout-seconds`, or for 0.5
 seconds without avy. `RET` ends the text at once, `DEL` takes a
 character back, and `ESC` gives up. Every place in view that shows the
@@ -581,11 +527,8 @@ A click on a tab shows its page in that window. Its `×` kills the page,
 and a window that showed it shows the tab to its right, or to its left
 for the last tab. The `+` offers the pages you kept, and opens the one
 you pick, or the URL you type, in this window.
-`C-<next>` and `C-<prior>` go to the next and the previous tab, as
-Control with Page Down and Page Up do in a browser; `C-TAB` stays with
-`tab-bar-mode`. `C-c C-t` reads a tab by its title or address, from a
-list that shows the icon of each page, and shows the one you choose.
-An embedded page has no tab: it belongs to the buffer it
+`C-<next>` and `C-<prior>` are Control with Page Down and Page Up of a
+browser; `C-TAB` stays with `tab-bar-mode`. An embedded page has no tab: it belongs to the buffer it
 is in.
 
 The icon is the one the page names in its head, or the one at
@@ -643,78 +586,20 @@ in `canvas-minimap-exclude-modes`. A page is a picture, not lines of
 text, and a map of it told the reader nothing the window does not. Take
 the mode out of that list to have the strip back, as an empty block.
 
-## While it moves, and once it stops
-
-A page that is moving is painted from the JPEG frames of chromium's
-screencast, which are cheap to make and show their workings around
-small text. `canvas-browser-crisp-delay` after the last key or click the
-window is asked for a still picture as a PNG, which loses nothing, and
-that is what you read. Remote desktops do the same thing under the name
-of a lossless refresh.
-
-The keys decide the moment, not the frames. A page with a spinner on it
-never falls quiet, and waiting for quiet would leave it lossy for as long
-as you looked at it; waiting on the keys instead means the page is crisp
-about four tenths of a second after you stop scrolling, measured at 0.39
-and 0.43 seconds on a GitHub Actions page. A still picture costs chromium
-a fifth of a second, so none is taken while you are working the keys, one
-asked for before a key and arriving after it is dropped as a picture of
-the page as it was, and no more than one is taken every
-`canvas-browser-live-interval`.
-
-A page is seldom either moving or still: a spinner beside a running job
-turns while the text around it stands. Every still picture is therefore
-followed by a question to the page about what is moving on it, which it
-answers from `document.getAnimations()` and from its videos, canvases
-and GIFs. While those parts cover less than `canvas-browser-live-share`
-of the window, each frame is drawn into them alone and the rest of the
-canvas keeps the still picture, with a fresh still every
-`canvas-browser-live-interval`. Measured on a GitHub Actions page with
-five spinners: 77 frames in 8.3 seconds, every one of them drawn into
-the spinners alone, and four still pictures in between.
-
-The page may of course change outside those parts, and that change waits
-for the next still picture. Any command in the buffer forgets the moving
-parts at once, so a scroll, a click or a key draws the whole window
-again.
-
-Chromium sends a screencast frame after every picture it is asked for,
-the picture being a draw like any other. Painted, that frame would ask
-for the next still picture, and the two would take turns on the canvas
-for ever, which the reader sees as a pulse around small text. A frame
-that is the picture the canvas already holds is therefore dropped, which
-is told by the md5 of its bytes.
-
-The numbers of one window of 1874 by 921 pixels: a JPEG at quality 70 is
-120 kB and takes 0.10 s, the same picture at quality 95 is 235 kB, and
-the PNG is 228 kB and takes 0.22 s. The PNG is therefore too slow for
-twelve frames a second and cheap for a page standing still. Drawing a
-frame into the moving parts costs about three milliseconds, and drawing
-the whole window about four, so the parts are clipped in one path and the
-picture read once: read once for each of five parts, the same frame cost
-sixteen milliseconds.
-
 ## A window of its own
 
 Chromium runs with a window, on an X display of its own: `Xvfb` is
 started on `canvas-browser-display` (`:98` by default) the first time a
 page is opened, and nothing is ever shown there. The page is read
 through the screencast, so none of it travels to your own display, which
-matters when that display is forwarded over ssh.
+matters when that display is forwarded over ssh. With a window, the
+sites see the Chrome they see anywhere, and pass a bot check that
+catches a headless one; [docs/design.md](docs/design.md#why-chromium-has-a-window)
+has the numbers.
 
-This is about what the sites see. A headless chromium says
-`HeadlessChrome` in its user agent, keeps `navigator.webdriver` true and
-has no WebGL at all, and a site behind a bot check reads all three: it
-then asks you to pick out traffic lights rather than to tick a box. With
-a window, and with WebGL drawn in software, the same four questions
-answer as they do in any Chrome.
-
-It is also faster. On the same page, the time from a scroll key to the
-new picture is 5 ms with a window and 26 ms without it, a still picture
-costs 0.18 s against 0.22 s, and the memory is the same to within half a
-percent, plus 87 MB for `Xvfb`. Software WebGL is for WebGL alone:
-drawing the whole window that way, which `--use-angle=swiftshader` does,
-cost two whole cores.
+A page that is moving is painted from the JPEG frames of chromium, and
+`canvas-browser-crisp-delay` after the last key or click it is drawn
+again as a PNG, which loses nothing.
 
 `canvas-browser-window-strategy` says how chromium gets its window:
 `xvfb`, the default on Linux, is the display of its own above;
@@ -737,23 +622,9 @@ The display touches your main display at its bottom right corner and
 nowhere else, and each page opens in a window of its own on it, so
 nothing of chromium comes into view, not even a window a page opens to
 sign in. The sites see the same Chrome as with a window on `Xvfb`, with
-the WebGL of the graphics card.
-
-macOS keeps every display touching another and lets the pointer through
-that corner, so the program puts a pointer that wanders onto the display
-back on the nearest point of a display you see: moved toward the corner,
-it stops there as at a wall. The program hears the mouse move in any
-application, which needs no permission for the mouse, and looks every
-quarter of a second for a pointer another program moved; waiting, it
-takes no time of the processor. Pages take their clicks and keys from
-chromium, not from the pointer, so this does not touch them.
-
-The display lasts as long as the
-program; Emacs starts it with chromium and stops it after chromium, and
-when the program ends by itself chromium is stopped too, since macOS
-would move its windows onto your screen. The program uses classes of
-macOS that are not public, as DeskPad does, so a macOS to come may
-break it.
+the WebGL of the graphics card. A pointer moved toward that corner stops
+there as at a wall. The program uses classes of macOS that are not
+public, as DeskPad does, so a macOS to come may break it.
 
 Without the program, or when it fails, canvas-browser says why, once,
 and uses `offscreen`: each window goes past the bottom right corner of
@@ -763,10 +634,6 @@ window that covers the corner, such as a large Emacs frame, and the page
 goes on drawing behind it. A window a page opens shows where chromium
 puts it for a few hundredths of a second before it goes to the corner.
 Set the strategy to `offscreen` to have this without the program.
-
-A window that is minimized, or whose application is hidden, would show
-nothing, but a page loaded into it draws nothing either: macOS tells
-chromium that the window is not visible. So neither is used.
 
 Chrome comes to the front with each window it opens, wherever the
 window is, and Emacs takes the focus back at once. Chrome is in the Dock
@@ -782,47 +649,36 @@ Chrome for Testing here keeps it apart from the Chrome you browse with.
 |---|---|---|
 | `canvas-browser-chromium` | chromium, chromium-browser, google-chrome, and the apps of Chromium and Google Chrome on macOS | the names looked for |
 | `canvas-browser-profile-directory` | by the chromium found | where the profile goes |
-| `canvas-browser-cdp-timeout` | 10 | seconds to wait for chromium |
 | `canvas-browser-window-strategy` | virtual-display on macOS, else xvfb | how chromium gets its window: xvfb, headless, virtual-display or offscreen |
-| `canvas-browser-virtual-display-program` | canvas-browser-display, next to canvas-browser | the program that makes the virtual display |
-| `canvas-browser-headless` | nil | the older way to say headless |
 | `canvas-browser-display` | :98 | the X display chromium draws its window on |
 | `canvas-browser-quality` | 70 | the quality of a moving frame, from 1 to 100 |
 | `canvas-browser-crisp-delay` | 0.4 | seconds of quiet before the page is drawn again without loss |
 | `canvas-browser-pulse-function` | smear-cursor's copy effect | what draws the eye to what a hint copied, or nil |
 | `canvas-browser-focus-function` | smear-cursor's flight | what draws the eye from the old focus to the new, or nil |
-| `canvas-browser-live-interval` | 2.0 | seconds between two still pictures while a part keeps moving |
-| `canvas-browser-live-share` | 0.3 | how much of the window may move and still count as parts of it |
-| `canvas-browser-live-pad` | 4 | pixels a moving part grows by |
-| `canvas-browser-frame-interval` | 0.08 | the shortest time between two drawings of the page |
-| `canvas-browser-hidden-interval` | 2.0 | the same for a page no window shows |
-| `canvas-browser-fresh-interval` | 2.0 | seconds between two looks at whether the window is fresh |
-| `canvas-browser-second-try` | 0.5 | seconds before a window still empty is asked again |
 | `canvas-browser-hint-keys` | asdfghjkl | the letters a hint is made of |
 | `canvas-browser-hint-font` | Sans Bold 11 | the font a hint is written in |
-| `canvas-browser-zoom-step` | 1.2 | what one zoom key changes |
 | `canvas-browser-line-height` | 40 | pixels that `j` and `k` scroll |
 | `canvas-browser-search-url` | DuckDuckGo | where words are searched for |
-| `canvas-browser-spots-delay` | 0.3 | seconds of quiet before the pointer areas are read |
 | `canvas-browser-tabs` | t | whether a page buffer shows a line of tabs |
-| `canvas-browser-tab-icons` | t | whether a tab shows the icon of its page |
 | `canvas-browser-tab-width` | 20 | the most characters of a title a tab shows |
-| `canvas-browser-tabs-fit` | t | whether the tabs narrow so that all of them fit in the window, down to the icon alone |
 | `canvas-browser-keep-tabs` | t | whether the tabs are kept, and come back in the next session |
-| `canvas-browser-tabs-file` | canvas-browser-tabs.eld in `user-emacs-directory` | the file they are kept in |
 
-A page that stops answering for a few seconds says so in the echo area,
-and `r` reads it again.
+The others, such as how often a moving page is drawn, are in Customize:
+`C` in a page buffer, or `M-x customize-group RET canvas-browser`.
 
-A window that has just changed size is filled as soon as chromium has
-laid the page out for it, and a window that paints nothing for
-`canvas-browser-fresh-interval` seconds asks for a picture of itself, so
-a window left black by a missed frame fills itself again.
+## Emacs that stops answering
 
-A page that no window shows is left to chromium, which throttles it as
-it throttles any tab behind another: its frames are stopped until you
-come back to it, and a handful of news sites no longer fight for the
-machine.
+Emacs 32.0.50, the master of October 2026, can freeze at 100% CPU while
+a TLS connection is still shaking hands: a call to
+`accept-process-output` for another process, without JUST-THIS-ONE,
+never returns. A tab opens such a connection when it fetches the icon of
+its page, so migemo, emacsql, pdf-tools and other packages that wait so
+can freeze then. `extras/tls-wait-fix.el` works around the bug. Load it
+before those packages, and remove it once Emacs is fixed:
+
+```elisp
+(load (expand-file-name "canvas-browser/extras/tls-wait-fix" "~/src"))
+```
 
 ## What it does not do
 
