@@ -258,6 +258,7 @@ Normal state keeps the keys of Emacs:
 | key | what it does |
 |---|---|
 | `o` | opens a page you kept, a URL, or a search for the words you type, in this buffer |
+| `e` | edits the address of this page, and goes to what you make of it |
 | `t` | opens a page you kept, a URL, or a search, in a new tab, as the `+` of the tabs does |
 | `B`, `J` | keep this page as a bookmark, and open a page you kept |
 | `y` | copies the address of this page, as `f y` copies the address of a link |
@@ -532,7 +533,8 @@ buffers of pages alone, so other buffers and the tabs of `tab-bar-mode`
 are left as they are. The tabs keep the order the pages were opened in.
 A tab shows the icon and the title of its page, cut to
 `canvas-browser-tab-width` characters, and its address until the page
-has given a title.
+has given a title. As more pages open, the tabs narrow so that all of
+them fit in the window, as in Chrome, down to the icon alone.
 
 A click on a tab shows its page in that window. Its `×` kills the page,
 and a window that showed it shows the tab to its right, or to its left
@@ -763,7 +765,8 @@ Chrome for Testing here keeps it apart from the Chrome you browse with.
 | `canvas-browser-spots-delay` | 0.3 | seconds of quiet before the pointer areas are read |
 | `canvas-browser-tabs` | t | whether a page buffer shows a line of tabs |
 | `canvas-browser-tab-icons` | t | whether a tab shows the icon of its page |
-| `canvas-browser-tab-width` | 24 | the most characters of a title a tab shows |
+| `canvas-browser-tab-width` | 20 | the most characters of a title a tab shows |
+| `canvas-browser-tabs-fit` | t | whether the tabs narrow so that all of them fit in the window, down to the icon alone |
 | `canvas-browser-keep-tabs` | t | whether the tabs are kept, and come back in the next session |
 | `canvas-browser-tabs-file` | canvas-browser-tabs.eld in `user-emacs-directory` | the file they are kept in |
 

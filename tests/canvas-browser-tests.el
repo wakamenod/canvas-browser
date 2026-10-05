@@ -737,6 +737,25 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
         (should (equal (cdr case) canvas-browser--url))
         (should (equal (cdr case) (plist-get (canvas-browser-test--params "Page.navigate") :url)))))))
 
+(ert-deftest canvas-browser-e-edits-the-address-of-this-page ()
+  ;; GIVEN a page buffer at an address
+  ;; WHEN e is pressed and the address it offers is edited
+  ;; THEN the field starts as the address, AND this buffer goes to the
+  ;;      edited one
+  (canvas-browser-test--in-page
+    (should (eq (key-binding (kbd "e")) #'canvas-browser-edit-url))
+    (should (eq (plist-get (canvas-browser-test--menu-entry "e") :command) #'canvas-browser-edit-url))
+    (let (offered)
+      (cl-letf (((symbol-function 'read-string)
+                 (lambda (_prompt initial &rest _)
+                   (setq offered initial)
+                   (concat initial "/b"))))
+        (call-interactively #'canvas-browser-edit-url))
+      (should (equal "https://example.org" offered))
+      (should (equal "https://example.org/b" canvas-browser--url))
+      (should (equal "https://example.org/b"
+                     (plist-get (canvas-browser-test--params "Page.navigate") :url))))))
+
 (ert-deftest canvas-browser-open-url-navigates-to-the-url-it-made ()
   ;; GIVEN a page buffer
   ;; WHEN a host without a scheme is opened
@@ -5130,6 +5149,34 @@ They are killed afterwards, and the icons known are forgotten."
         (should (<= (string-width first) 10))
         (should (string-prefix-p "A title" first))
         (should (equal second "e.org/a"))))))
+
+(ert-deftest canvas-browser-the-tabs-narrow-to-fit-the-window ()
+  ;; GIVEN a window 800 pixels wide, and a character of the tabs 10 wide
+  ;; WHEN there are two tabs, four, and forty
+  ;; THEN two show the whole width, four show less, forty show nothing of
+  ;;      the title, AND with the fitting off every tab shows the whole width
+  (let ((canvas-browser-tab-width 20)
+        (canvas-browser-tabs-fit t))
+    (cl-letf (((symbol-function 'window-pixel-width) (lambda (&rest _) 800))
+              ((symbol-function 'string-pixel-width) (lambda (string &rest _) (* 10 (length string)))))
+      (should (= 20 (canvas-browser--tab-title-width 2)))
+      (should (= 4 (canvas-browser--tab-title-width 4)))
+      (should (= 0 (canvas-browser--tab-title-width 40)))
+      (let ((canvas-browser-tabs-fit nil))
+        (should (= 20 (canvas-browser--tab-title-width 40)))))))
+
+(ert-deftest canvas-browser-a-narrow-tab-shows-its-icon-alone ()
+  ;; GIVEN so many tabs that a tab has no room for its title
+  ;; WHEN a tab with an icon is named
+  ;; THEN it shows the icon and no title
+  (canvas-browser-test--with-pages '("*a*")
+    (with-current-buffer (car pages)
+      (setq canvas-browser--title "Example"
+            canvas-browser--icon (canvas-browser--icon-spec canvas-browser--blank-icon-svg 'svg)))
+    (cl-letf (((symbol-function 'canvas-browser--tab-title-width) (lambda (_) 0)))
+      (let ((name (canvas-browser--tab-name (car pages) pages)))
+        (should-not (string-search "Example" name))
+        (should (get-text-property 1 'display name))))))
 
 (ert-deftest canvas-browser-a-tab-shows-the-icon-of-its-page ()
   ;; GIVEN a page whose icon is known

@@ -1878,6 +1878,16 @@ file is copied, so a page that loads files beside it finds none."
   "TEXT as a URL the chromium in use can reach; see `canvas-browser--url-of'."
   (canvas-browser--readable-url (canvas-browser--url-of text)))
 
+(defvar canvas-browser--url-history nil
+  "The addresses edited with `canvas-browser-edit-url\='.")
+
+(defun canvas-browser-edit-url (url)
+  "Go to URL in this buffer, asked for as the address of this page to edit.
+Words become a search, as with `canvas-browser-open-url\='."
+  (interactive
+   (list (read-string "URL: " canvas-browser--url 'canvas-browser--url-history)))
+  (canvas-browser-open-url url))
+
 (defun canvas-browser-open-url (url)
   "Go to URL in this buffer.
 A URL without a scheme gets one, and words become a search.  Asked
@@ -2817,6 +2827,7 @@ and the settings.  The widths line the columns of the two rows up."
   :column-widths '(13 13 24)
   ["Go"
    ("o" "open" canvas-browser-open-url)
+   ("e" "edit URL" canvas-browser-edit-url)
    ("t" "new tab" canvas-browser-new-tab)
    ("x" "close" canvas-browser-close-tab)
    ("X" "reopen" canvas-browser-reopen-tab)
@@ -2857,6 +2868,7 @@ keys zoom the page.  `r\=' reads the page again, as `g\=', which is
   "M-p" #'canvas-browser-back
   "M-n" #'canvas-browser-forward
   "o" #'canvas-browser-open-url
+  "e" #'canvas-browser-edit-url
   "r" #'canvas-browser-refresh
   "y" #'canvas-browser-copy-url
   "B" #'canvas-browser-bookmark
@@ -3733,17 +3745,47 @@ runs."
   :type 'boolean
   :group 'canvas-browser)
 
-(defcustom canvas-browser-tab-width 24
-  "The most characters of a page's title that its tab shows."
+(defcustom canvas-browser-tab-width 20
+  "The most characters of a page's title that its tab shows.
+With `canvas-browser-tabs-fit\=' on, a tab shows fewer when the tabs
+would not all fit in the window otherwise."
   :type 'integer
   :group 'canvas-browser)
 
+(defcustom canvas-browser-tabs-fit t
+  "Whether the tabs narrow so that all of them fit in the window.
+Each tab then shows as much of its title as the width of the window
+leaves it, up to `canvas-browser-tab-width\=', and at the narrowest its
+icon alone, as the tabs of a browser do.  Off, every tab shows the whole
+`canvas-browser-tab-width\=' and the line scrolls."
+  :type 'boolean
+  :group 'canvas-browser)
+
+(defconst canvas-browser--tab-frame 14
+  "The columns of a tab besides its title: the spaces, the icon, `×\=',
+the edges and the gap to the next tab, as measured on a tab line.")
+
+(defun canvas-browser--tab-title-width (count)
+  "How many characters of its title each of COUNT tabs shows.
+The window is measured in pixels, and a character in the width of one
+of the text of the tabs, which is smaller than the text of the buffer
+and may be of another font; the `+\=' of the line takes three of them."
+  (let ((most canvas-browser-tab-width))
+    (if (not (and canvas-browser-tabs-fit count (> count 0)))
+        most
+      (let* ((char (max 1.0 (/ (string-pixel-width
+                                (propertize (make-string 10 ?n) 'face 'canvas-browser-tab-line))
+                               10.0)))
+             (room (- (window-pixel-width) (* 3 char)))
+             (each (floor (- (/ room count) (* canvas-browser--tab-frame char)) char)))
+        (max 0 (min most (1- each)))))))
+
 (defface canvas-browser-tab-line
   '((((class color) (min-colors 88) (background light))
-     :background "#dee1e6" :foreground "#3c4043")
+     :background "#dee1e6" :foreground "#3c4043" :height 0.85)
     (((class color) (min-colors 88) (background dark))
-     :background "#202124" :foreground "#bdc1c6")
-    (t :inherit tab-line))
+     :background "#202124" :foreground "#bdc1c6" :height 0.85)
+    (t :inherit tab-line :height 0.85))
   "The line of tabs of a page buffer, behind the tabs.
 It is laid over `tab-line\=' in a page buffer alone, so that the tabs of
 pages do not look like the tabs of `tab-bar-mode\='."
@@ -3752,10 +3794,10 @@ pages do not look like the tabs of `tab-bar-mode\='."
 (defface canvas-browser-tab
   '((((class color) (min-colors 88) (background light))
      :background "#dee1e6" :foreground "#5f6368"
-     :box (:line-width (1 . 4) :style flat-button))
+     :box (:line-width (1 . 2) :style flat-button))
     (((class color) (min-colors 88) (background dark))
      :background "#202124" :foreground "#9aa0a6"
-     :box (:line-width (1 . 4) :style flat-button))
+     :box (:line-width (1 . 2) :style flat-button))
     (t :inherit tab-line-tab-inactive))
   "The tab of a page that is not the one shown."
   :group 'canvas-browser)
@@ -3763,10 +3805,10 @@ pages do not look like the tabs of `tab-bar-mode\='."
 (defface canvas-browser-tab-current
   '((((class color) (min-colors 88) (background light))
      :background "#ffffff" :foreground "#202124"
-     :box (:line-width (1 . 4) :style flat-button))
+     :box (:line-width (1 . 2) :style flat-button))
     (((class color) (min-colors 88) (background dark))
      :background "#3c4043" :foreground "#e8eaed"
-     :box (:line-width (1 . 4) :style flat-button))
+     :box (:line-width (1 . 2) :style flat-button))
     (t :inherit tab-line-tab-current))
   "The tab of the page a window shows."
   :group 'canvas-browser)
@@ -3831,18 +3873,25 @@ that jumped about under the pointer could not be clicked."
                           (canvas-browser--icon-spec canvas-browser--blank-icon-svg 'svg))))))
     (if image (propertize " " 'display image) "")))
 
-(defun canvas-browser--tab-name (buffer &optional _buffers)
+(defun canvas-browser--tab-name (buffer &optional buffers)
   "The name of BUFFER's tab: the icon and the title of its page.
-A page that has not said its title yet is named by its address."
-  (with-current-buffer buffer
-    (let ((title (string-trim
-                  (replace-regexp-in-string
-                   "[\n\t]+" " " (or canvas-browser--title canvas-browser--url (buffer-name))))))
-      (concat " "
-              (when canvas-browser-tab-icons
-                (concat (canvas-browser--tab-icon) " "))
-              (truncate-string-to-width title canvas-browser-tab-width nil nil t)
-              " "))))
+A page that has not said its title yet is named by its address.  The
+title is cut so that the tabs of BUFFERS all fit in the window; see
+`canvas-browser-tabs-fit\='.  At the narrowest a tab with an icon shows
+the icon alone."
+  (let ((width (canvas-browser--tab-title-width (length buffers))))
+    (with-current-buffer buffer
+      (let* ((title (string-trim
+                     (replace-regexp-in-string
+                      "[\n\t]+" " " (or canvas-browser--title canvas-browser--url (buffer-name)))))
+             (icon (and canvas-browser-tab-icons (canvas-browser--tab-icon)))
+             (shown (if (and (< width 2) icon (not (string-empty-p icon)))
+                        ""
+                      (truncate-string-to-width title (max width 1) nil nil t))))
+        (concat " "
+                (when icon (concat icon (unless (string-empty-p shown) " ")))
+                shown
+                " ")))))
 
 (defun canvas-browser--tab-cache-key (tabs)
   "What tab-line keeps the line of TABS for, with what names each tab.
@@ -3850,6 +3899,7 @@ Tab-line draws the line again when the buffers change, but the title of
 a page and its icon change in a buffer that stays.  The default keys
 come first, since tab-line reads two of them by their place."
   (append (tab-line-cache-key-default tabs)
+          (list (window-total-width))
           (list (mapcar (lambda (buffer)
                           (with-current-buffer buffer
                             (list canvas-browser--title canvas-browser--url
