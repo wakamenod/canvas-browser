@@ -4617,11 +4617,20 @@ among them is shown rather than a second one opened."
 
 (put 'canvas-browser-bookmark-jump 'bookmark-handler-type "Web")
 
-(defun canvas-browser-bookmark ()
-  "Keep this page as a bookmark, named by its title unless you name it."
-  (interactive)
+(defun canvas-browser-bookmark (name)
+  "Keep this page as a bookmark called NAME.
+Asked for, NAME starts as the title of the page, to keep or to edit;
+`M-n' offers the address instead.  A bookmark of that name already is
+replaced, as `bookmark-set' replaces it."
+  (interactive
+   (progn
+     (require 'bookmark)
+     (let ((defaults (bookmark-prop-get (canvas-browser-bookmark-make-record) 'defaults)))
+       (list (read-string "Bookmark: " (car defaults) nil defaults)))))
   (require 'bookmark)
-  (call-interactively #'bookmark-set))
+  (when (string-blank-p name)
+    (user-error "canvas-browser: a bookmark needs a name"))
+  (bookmark-set name))
 
 (defun canvas-browser--bookmark-names ()
   "The names of the bookmarks of pages, in the order of the bookmark list."

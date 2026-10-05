@@ -4907,6 +4907,24 @@ Return the dired buffer in which they are picked."
   (let ((bookmark-alist nil))
     (should-error (canvas-browser-open-bookmark-or-url "  ") :type 'user-error)))
 
+(ert-deftest canvas-browser-b-starts-the-name-as-the-title ()
+  ;; GIVEN a page buffer whose page has a title
+  ;; WHEN B asks for the name of the bookmark, and it is kept as it is
+  ;; THEN the title stands in the field to edit, the address is offered
+  ;;      too, AND the bookmark is kept under the title
+  (canvas-browser-test--in-page
+    (setq canvas-browser--title "Example Domain")
+    (let ((bookmark-alist nil)
+          (bookmark-save-flag nil)
+          (asked nil))
+      (cl-letf (((symbol-function 'read-string)
+                 (lambda (_prompt initial _history defaults &rest _)
+                   (setq asked (list initial defaults))
+                   initial)))
+        (call-interactively #'canvas-browser-bookmark))
+      (should (equal '("Example Domain" ("Example Domain" "https://example.org")) asked))
+      (should (equal "https://example.org" (bookmark-prop-get "Example Domain" 'location))))))
+
 (ert-deftest canvas-browser-bookmark-keys ()
   ;; GIVEN a page buffer and its menu
   ;; WHEN B and J are looked up

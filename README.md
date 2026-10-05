@@ -198,8 +198,8 @@ delete the frame, the page leaves fullscreen.
 ### Bookmarks
 
 A page is an Emacs bookmark. `B` keeps the page as one, named by its
-title unless you give another name, and `J` picks one of the pages you
-kept and opens it. The names come as bookmarks, so marginalia, consult
+title, which stands in the field for you to keep or edit, and `J` picks
+one of the pages you kept and opens it. The names come as bookmarks, so marginalia, consult
 and embark treat them as they treat any bookmark. `C-x r m`,
 `bookmark-jump` and the bookmark list work with pages too. In
 `consult-bookmark` the pages are in the Web group, next to those of
