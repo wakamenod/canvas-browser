@@ -2740,7 +2740,6 @@ and the settings.  The widths line the columns of the two rows up."
    ("s" "find" canvas-browser-find)
    ("t" "text" canvas-browser-text)
    ("L" "lines" canvas-browser-search-text)
-   ("e" "eww" canvas-browser-open-in-eww)
    ("y" "copy URL" canvas-browser-copy-url)]
   ["Modes"
    ("d" canvas-browser-toggle-dark :transient t
@@ -2787,7 +2786,6 @@ keys zoom the page.  `g\=' is `revert-buffer\=', which reads it again.")
   "n" #'canvas-browser-scroll-line-up
   "p" #'canvas-browser-scroll-line-down
   "t" #'canvas-browser-text
-  "e" #'canvas-browser-open-in-eww
   "M-s M-l" #'canvas-browser-search-text
   "z" #'canvas-keys-zoom-fit
   "<remap> <scroll-up-command>" #'canvas-browser-scroll-up
@@ -3400,13 +3398,6 @@ here, on every load."
 (canvas-browser--bind-insert-keys canvas-browser-insert-map)
 
 (declare-function eww "eww" (url &optional arg))
-
-(defun canvas-browser-open-in-eww ()
-  "Open the URL of this page in eww, which reads it as text."
-  (interactive)
-  (unless canvas-browser--url
-    (user-error "canvas-browser: this buffer holds no URL"))
-  (eww canvas-browser--url))
 
 (defun canvas-browser-insert-mode ()
   "Send every key to the page until `ESC'.

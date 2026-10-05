@@ -144,7 +144,7 @@ that moment now."
                       (list #'canvas-browser-search-text #'canvas-browser-text
                             #'canvas-browser-find #'canvas-browser-find-previous
                             #'canvas-browser-hints #'canvas-browser-toggle-dark
-                            #'canvas-browser-open-in-eww #'canvas-browser-back
+                            #'canvas-browser-back
                             #'canvas-browser-forward #'canvas-browser-open-url
                             #'canvas-browser-scroll-line-up #'canvas-browser-scroll-line-down)))
     (should (eq (key-binding (kbd "o")) #'canvas-browser-open-url))
@@ -843,17 +843,6 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
       (should (member "Page.stopScreencast" methods))
       (should (< (cl-position "Page.startScreencast" methods :test #'equal)
                  (cl-position "Page.stopScreencast" methods :test #'equal))))))
-
-(ert-deftest canvas-browser-e-opens-the-page-in-eww ()
-  ;; GIVEN a page buffer at a URL
-  ;; WHEN e is pressed
-  ;; THEN eww opens that same URL
-  (canvas-browser-test--in-page
-    (let ((opened nil))
-      (cl-letf (((symbol-function 'eww) (lambda (url &rest _) (setq opened url))))
-        (should (eq (key-binding (kbd "e")) #'canvas-browser-open-in-eww))
-        (canvas-browser-open-in-eww)
-        (should (equal opened "https://example.org"))))))
 
 (defun canvas-browser-test--menu-rows ()
   "The rows of the page menu, each the list of its column headings."

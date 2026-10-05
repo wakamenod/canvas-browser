@@ -21,7 +21,7 @@ them, and here they are buffers.
 ## Other browsers in Emacs
 
 eww draws the HTML as text in the buffer and runs no JavaScript. Use eww
-where it is enough: `e` opens the same address there.
+where it is enough.
 
 xwidget-webkit puts a WebKitGTK widget in the window. It needs an Emacs
 that was built with xwidgets, which only the GTK build and the macOS
@@ -280,7 +280,6 @@ Normal state keeps the keys of Emacs:
 | `i` | sends the keys to the page, as a click in a field does |
 | `t` | puts the text of the page in an ordinary buffer |
 | `M-s M-l` | searches that text with `consult-line` |
-| `e` | opens the same URL in eww |
 | a click | clicks the page at that pixel, and types there if it is a field |
 | a drag | marks what lies between its two ends, once the button is let go |
 | the wheel | scrolls what lies under the pointer, over a link as well |
