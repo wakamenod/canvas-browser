@@ -208,8 +208,10 @@ shows already goes to that buffer.
 
 `M-x canvas-browser-open-bookmark-or-url` offers the pages you kept as
 `J` does, and opens what matches none of them as a URL, so one command
-serves for both. Words become a search, as with `o`. It works outside a
-page buffer too, so you can bind it to a key of your own.
+serves for both. Words, or a word with no dot, become a search. It
+opens a page buffer of its own, and works outside a page buffer too, so
+you can bind it to a key of your own. `o` asks the same question, and
+opens the answer in this buffer.
 
 ### Attaching a file
 
@@ -255,17 +257,18 @@ Normal state keeps the keys of Emacs:
 
 | key | what it does |
 |---|---|
-| `o` | opens a URL in this buffer, or searches for the words you type |
+| `o` | opens a page you kept, a URL, or a search for the words you type, in this buffer |
+| `t` | opens a page you kept, a URL, or a search, in a new tab, as the `+` of the tabs does |
 | `B`, `J` | keep this page as a bookmark, and open a page you kept |
 | `y` | copies the address of this page, as `f y` copies the address of a link |
-| `O` | the same in a page buffer of its own, as the `O` of Vimium and qutebrowser opens a tab |
 | `C-<next>`, `C-<prior>` | go to the next and the previous tab, in insert state as well |
 | `C-c C-t` | choose a tab by its title or address, from a list with the icons |
 | `x` | closes this tab, and shows the one to its right |
 | `X` | opens again the tab closed last, in its place among the tabs |
-| `g` | reads the page again |
+| `r` | reads the page again, as `g` does |
 | `M-p`, `M-n` | go back and forward in the history |
-| `n`, `p` | scroll a line further down and back |
+| `j`, `k` | scroll a line further down and back |
+| `d`, `u` | scroll a screen further down and back |
 | `C-v`, `M-v`, the arrows | scroll a screen and a line |
 | `<prior>`, `<next>` | scroll a screen back and further down |
 | `<home>`, `<end>`, `C-<home>`, `C-<end>`, `M-<`, `M->` | go to the top and the foot of the page |
@@ -276,9 +279,8 @@ Normal state keeps the keys of Emacs:
 | `M-j` | puts the caret on text you type, as `avy-goto-char-timer` puts point |
 | `TAB`, `S-TAB` | go to the next and the previous field, and type there |
 | `C-s`, `C-r` | search the page, and step to the next hit and the one before |
-| `d` | turns dark mode on or off, for this page and the next ones |
 | `i` | sends the keys to the page, as a click in a field does |
-| `t` | puts the text of the page in an ordinary buffer |
+| `T` | puts the text of the page in an ordinary buffer |
 | `M-s M-l` | searches that text with `consult-line` |
 | a click | clicks the page at that pixel, and types there if it is a field |
 | a drag | marks what lies between its two ends, once the button is let go |
@@ -445,8 +447,9 @@ The search paints every hit in the page itself, with the highlight API of
 CSS, and scrolls to the one you are on. `window.find` answers in a
 headless chromium but leaves nothing to see.
 
-The buffer that `t` fills is an ordinary buffer, so isearch,
-`consult-line` and the kill ring work on the text of the page.
+The buffer that `T` fills is an ordinary buffer, so isearch,
+`consult-line` and the kill ring work on the text of the page. `T` goes
+to it, and `q` leaves it and goes back to the page, as in a help buffer.
 
 ## The caret of the page
 
@@ -755,7 +758,7 @@ Chrome for Testing here keeps it apart from the Chrome you browse with.
 | `canvas-browser-hint-keys` | asdfghjkl | the letters a hint is made of |
 | `canvas-browser-hint-font` | Sans Bold 11 | the font a hint is written in |
 | `canvas-browser-zoom-step` | 1.2 | what one zoom key changes |
-| `canvas-browser-line-height` | 40 | pixels that `n` and `p` scroll |
+| `canvas-browser-line-height` | 40 | pixels that `j` and `k` scroll |
 | `canvas-browser-search-url` | DuckDuckGo | where words are searched for |
 | `canvas-browser-spots-delay` | 0.3 | seconds of quiet before the pointer areas are read |
 | `canvas-browser-tabs` | t | whether a page buffer shows a line of tabs |
@@ -765,7 +768,7 @@ Chrome for Testing here keeps it apart from the Chrome you browse with.
 | `canvas-browser-tabs-file` | canvas-browser-tabs.eld in `user-emacs-directory` | the file they are kept in |
 
 A page that stops answering for a few seconds says so in the echo area,
-and `g` reads it again.
+and `r` reads it again.
 
 A window that has just changed size is filled as soon as chromium has
 laid the page out for it, and a window that paints nothing for

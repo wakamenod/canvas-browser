@@ -1760,12 +1760,13 @@ copies it."
 (defun canvas-browser--url-of (text)
   "TEXT as a URL: its own scheme, else one that fits, else a search.
 A local address gets http, since a server on this machine rarely has a
-certificate, and anything else gets https."
+certificate, and a host gets https.  Words, or a word with no dot, are
+searched for, as a browser does; a host with no dot needs its scheme."
   (let ((text (string-trim text)))
     (cond ((string-match-p canvas-browser--local-host text) (concat "http://" text))
           ;; A port is no scheme: localhost:8080 is a host, mailto:a@b is not.
           ((string-match-p "\\`[a-zA-Z][a-zA-Z0-9+.-]*:\\(//\\|[^0-9]\\)" text) text)
-          ((string-match-p "[ \t]" text)
+          ((or (string-match-p "[ \t]" text) (not (string-search "." text)))
            (format canvas-browser-search-url (url-hexify-string text)))
           (t (concat "https://" text)))))
 
@@ -1803,8 +1804,12 @@ file is copied, so a page that loads files beside it finds none."
 
 (defun canvas-browser-open-url (url)
   "Go to URL in this buffer.
-A URL without a scheme gets one, and words become a search."
-  (interactive "sURL: ")
+A URL without a scheme gets one, and words become a search.  Asked
+for, the bookmarks of pages are offered, and the one picked is gone to
+in this buffer; what matches none of them is taken as a URL."
+  (interactive (list (canvas-browser--read-page-or-url)))
+  (when (string-blank-p url)
+    (user-error "canvas-browser: no page or URL given"))
   (setq canvas-browser--url (canvas-browser--reachable-url url))
   (canvas-browser--tell "Page.navigate" (list :url canvas-browser--url)))
 
@@ -2547,20 +2552,30 @@ picture with its own dark turned off, and leaves the page that way."
   "Put the text of the page in a buffer and search it with `consult-line\='.
 Without consult, isearch takes over in that buffer."
   (interactive)
-  (canvas-browser-text)
+  (canvas-browser--fill-text #'display-buffer)
   (with-current-buffer (canvas-browser--text-buffer)
     (if (fboundp 'consult-line)
         (call-interactively 'consult-line)
       (call-interactively 'isearch-forward))))
 
 (defun canvas-browser--text-buffer ()
-  "The buffer that holds the text of this page."
-  (get-buffer-create (format "*canvas-browser-text: %s*"
-                             (or canvas-browser--title canvas-browser--url))))
+  "The buffer that holds the text of this page.
+It is read only, and `q' quits its window, as in a help buffer."
+  (let ((buffer (get-buffer-create (format "*canvas-browser-text: %s*"
+                                           (or canvas-browser--title canvas-browser--url)))))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'special-mode)
+        (special-mode)))
+    buffer))
 
 (defun canvas-browser-text ()
-  "Put the text of the page in a buffer, where the keys of Emacs work."
+  "Put the text of the page in a buffer, where the keys of Emacs work.
+The buffer is selected; `q' leaves it and goes back to the page."
   (interactive)
+  (canvas-browser--fill-text #'pop-to-buffer))
+
+(defun canvas-browser--fill-text (show)
+  "Put the text of the page in its buffer, and call SHOW with that buffer."
   (let ((target (canvas-browser--text-buffer)))
     (canvas-browser-cdp-send
      "Runtime.evaluate" (list :expression "document.body.innerText" :returnByValue t)
@@ -2570,7 +2585,7 @@ Without consult, isearch takes over in that buffer."
            (erase-buffer)
            (insert (or (plist-get (plist-get result :result) :value) ""))
            (goto-char (point-min))))
-       (display-buffer target))
+       (funcall show target))
      canvas-browser--session)))
 
 ;;;; The zoom and the picture
@@ -2725,10 +2740,10 @@ and the settings.  The widths line the columns of the two rows up."
   :column-widths '(13 13 24)
   ["Go"
    ("o" "open" canvas-browser-open-url)
-   ("O" "new" canvas-browser)
+   ("t" "new tab" canvas-browser-new-tab)
    ("x" "close" canvas-browser-close-tab)
    ("X" "reopen" canvas-browser-reopen-tab)
-   ("g" "reload" canvas-browser-refresh)
+   ("r" "reload" canvas-browser-refresh)
    ("b" "back" canvas-browser-back)
    ("F" "forward" canvas-browser-forward)
    ("B" "bookmark" canvas-browser-bookmark)
@@ -2738,12 +2753,10 @@ and the settings.  The widths line the columns of the two rows up."
    ("M-j" "jump" canvas-browser-caret-jump)
    ("TAB" "field" canvas-browser-next-field)
    ("s" "find" canvas-browser-find)
-   ("t" "text" canvas-browser-text)
+   ("T" "text" canvas-browser-text)
    ("L" "lines" canvas-browser-search-text)
    ("y" "copy URL" canvas-browser-copy-url)]
   ["Modes"
-   ("d" canvas-browser-toggle-dark :transient t
-    :description (lambda () (canvas-keys-setting "dark" 'canvas-browser-dark)))
    ("i" canvas-browser-insert-mode
     :description (lambda () (canvas-keys-setting "typing" 'canvas-browser--insert)))
    ("v" canvas-browser-caret-mode
@@ -2757,7 +2770,8 @@ and the settings.  The widths line the columns of the two rows up."
   "Keymap of a page buffer in normal state.
 The common canvas keys come from canvas-keys: `SPC\=' opens the menu,
 `q\=' quits, `W\=' writes the picture, `C\=' customizes, and the zoom
-keys zoom the page.  `g\=' is `revert-buffer\=', which reads it again.")
+keys zoom the page.  `r\=' reads the page again, as `g\=', which is
+`revert-buffer\=', does.")
 
 ;; The keys are bound here and not where the map is made.  A variable
 ;; keeps its value when its file is loaded again, so keys bound there
@@ -2766,7 +2780,7 @@ keys zoom the page.  `g\=' is `revert-buffer\=', which reads it again.")
   "M-p" #'canvas-browser-back
   "M-n" #'canvas-browser-forward
   "o" #'canvas-browser-open-url
-  "O" #'canvas-browser
+  "r" #'canvas-browser-refresh
   "y" #'canvas-browser-copy-url
   "B" #'canvas-browser-bookmark
   "J" #'canvas-browser-open-bookmark
@@ -2782,10 +2796,12 @@ keys zoom the page.  `g\=' is `revert-buffer\=', which reads it again.")
   "<backtab>" #'canvas-browser-previous-field
   "C-s" #'canvas-browser-find
   "C-r" #'canvas-browser-find-previous
-  "d" #'canvas-browser-toggle-dark
-  "n" #'canvas-browser-scroll-line-up
-  "p" #'canvas-browser-scroll-line-down
-  "t" #'canvas-browser-text
+  "j" #'canvas-browser-scroll-line-up
+  "k" #'canvas-browser-scroll-line-down
+  "d" #'canvas-browser-scroll-up
+  "u" #'canvas-browser-scroll-down
+  "t" #'canvas-browser-new-tab
+  "T" #'canvas-browser-text
   "M-s M-l" #'canvas-browser-search-text
   "z" #'canvas-keys-zoom-fit
   "<remap> <scroll-up-command>" #'canvas-browser-scroll-up
@@ -3339,7 +3355,7 @@ An embedded page whose host no longer holds its picture goes instead."
           (cl-incf canvas-browser--quiet)
           (when (= canvas-browser--quiet canvas-browser--quiet-looks)
             (message (concat "canvas-browser: the page has stopped answering;"
-                             " g reads it again")))))))))
+                             " r reads it again")))))))))
 
 (defun canvas-browser--paint-if-quiet (buffer frames)
   "Ask BUFFER for a picture of its window if it has painted none since FRAMES."
@@ -3838,8 +3854,9 @@ Its title and icon show at once; the page itself is read again."
     buffer))
 
 (defun canvas-browser-new-tab ()
-  "Open a page you kept, or a URL, in a new tab, in this window, as `+'
-of the tabs does; see `canvas-browser-open-bookmark-or-url'."
+  "Open a page you kept, a URL or a search in a new tab, in this window.
+`t' and the `+' of the tabs do this, as `t' of Vimium opens a tab; see
+`canvas-browser-open-bookmark-or-url'."
   (interactive)
   (canvas-browser--let-go-of-the-click)
   (let ((display-buffer-overriding-action '(display-buffer-same-window)))
@@ -4623,6 +4640,15 @@ embark treat them as they treat any bookmark."
                    (user-error "canvas-browser: no page is bookmarked yet; B keeps this one"))))
     (bookmark-jump (canvas-browser--read-bookmark "Page: " names t))))
 
+(defun canvas-browser--read-page-or-url ()
+  "Read a bookmark of a page, a URL or words to search for.
+A bookmark is read as its address; anything else as it is typed."
+  (require 'bookmark)
+  (bookmark-maybe-load-default-file)
+  (let* ((names (canvas-browser--bookmark-names))
+         (text (canvas-browser--read-bookmark "Page, URL or words: " names nil)))
+    (if (member text names) (bookmark-prop-get text 'location) text)))
+
 (defun canvas-browser--read-bookmark (prompt names require-match)
   "Read one of NAMES, the bookmarks of pages, with PROMPT.
 REQUIRE-MATCH is as in `completing-read'."
@@ -4643,7 +4669,8 @@ search.  A page that a buffer shows already goes to that buffer."
    (progn
      (require 'bookmark)
      (bookmark-maybe-load-default-file)
-     (list (canvas-browser--read-bookmark "Page or URL: " (canvas-browser--bookmark-names) nil))))
+     (list (canvas-browser--read-bookmark "Page, URL or words: "
+                                          (canvas-browser--bookmark-names) nil))))
   (when (string-blank-p text)
     (user-error "canvas-browser: no page or URL given"))
   (require 'bookmark)

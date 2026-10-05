@@ -133,10 +133,17 @@ that moment now."
   ;; THEN they run the commands of the package, not the page
   (canvas-browser-test--in-page
     (should (eq (key-binding (kbd "g")) #'revert-buffer))
+    (should (eq (key-binding (kbd "r")) #'canvas-browser-refresh))
+    (should (eq (plist-get (canvas-browser-test--menu-entry "r") :command) #'canvas-browser-refresh))
+    (should-not (canvas-browser-test--menu-entry "g"))
     (should (eq (key-binding (kbd "M-p")) #'canvas-browser-back))
     (should (eq (key-binding (kbd "M-n")) #'canvas-browser-forward))
-    (should (eq (key-binding (kbd "n")) #'canvas-browser-scroll-line-up))
-    (should (eq (key-binding (kbd "p")) #'canvas-browser-scroll-line-down))
+    (should (eq (key-binding (kbd "j")) #'canvas-browser-scroll-line-up))
+    (should (eq (key-binding (kbd "k")) #'canvas-browser-scroll-line-down))
+    (should (eq (key-binding (kbd "d")) #'canvas-browser-scroll-up))
+    (should (eq (key-binding (kbd "u")) #'canvas-browser-scroll-down))
+    (should (eq (key-binding (kbd "n")) 'undefined))
+    (should (eq (key-binding (kbd "p")) 'undefined))
     (should (eq (key-binding (kbd "C-s")) #'canvas-browser-find))
     (should (eq (key-binding (kbd "M-s M-l")) #'canvas-browser-search-text))
     ;; Every key of this map names a command that exists.
@@ -445,19 +452,24 @@ that moment now."
 (ert-deftest canvas-browser-text-opens-the-page-as-a-buffer ()
   ;; GIVEN a page whose text is two lines
   ;; WHEN the text is asked for
-  ;; THEN a buffer of its own holds that text, with point at its start
+  ;; THEN a buffer of its own holds that text, with point at its start,
+  ;;      AND it is the buffer gone to, read only, where q quits
   (canvas-browser-test--in-page
-    (cl-letf (((symbol-function 'canvas-browser-cdp-send)
-               (lambda (_method _params &optional answer _session)
-                 (when answer (funcall answer '(:result (:value "one\ntwo"))))))
-              ((symbol-function 'display-buffer) #'ignore))
-      (canvas-browser-text))
-    (let ((text-buffer (canvas-browser--text-buffer)))
-      (unwind-protect
-          (with-current-buffer text-buffer
-            (should (equal (buffer-string) "one\ntwo"))
-            (should (= (point) (point-min))))
-        (kill-buffer text-buffer)))))
+    (let (shown)
+      (cl-letf (((symbol-function 'canvas-browser-cdp-send)
+                 (lambda (_method _params &optional answer _session)
+                   (when answer (funcall answer '(:result (:value "one\ntwo"))))))
+                ((symbol-function 'pop-to-buffer) (lambda (buffer &rest _) (setq shown buffer))))
+        (canvas-browser-text))
+      (let ((text-buffer (canvas-browser--text-buffer)))
+        (unwind-protect
+            (with-current-buffer text-buffer
+              (should (eq shown text-buffer))
+              (should (equal (buffer-string) "one\ntwo"))
+              (should (= (point) (point-min)))
+              (should buffer-read-only)
+              (should (eq (key-binding (kbd "q")) #'quit-window)))
+          (kill-buffer text-buffer))))))
 
 ;;;; The window, the header line and a chromium that died
 
@@ -658,11 +670,12 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
 ;;;; What you type in the URL prompt
 
 (ert-deftest canvas-browser-a-url-without-a-scheme-gets-one ()
-  ;; GIVEN a host, a host with a scheme, a file URL, a local address and
-  ;;       words with a space in them
+  ;; GIVEN a host, a host with a scheme, a file URL, a local address,
+  ;;       words with a space in them, and a word with no dot
   ;; WHEN each is made into a URL
   ;; THEN the host gets https, the scheme and the file URL stay as they
-  ;;      are, the local address gets http, AND the words become a search
+  ;;      are, the local address gets http, AND the words and the word
+  ;;      become a search
   (let ((canvas-browser-search-url "https://duckduckgo.com/?q=%s"))
     (should (equal (canvas-browser--url-of "www.vg.no") "https://www.vg.no"))
     (should (equal (canvas-browser--url-of "https://x.org/a") "https://x.org/a"))
@@ -670,7 +683,30 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
     (should (equal (canvas-browser--url-of "localhost:8080/x") "http://localhost:8080/x"))
     (should (equal (canvas-browser--url-of "127.0.0.1:3000") "http://127.0.0.1:3000"))
     (should (equal (canvas-browser--url-of "what is a canvas")
-                   "https://duckduckgo.com/?q=what%20is%20a%20canvas"))))
+                   "https://duckduckgo.com/?q=what%20is%20a%20canvas"))
+    (should (equal (canvas-browser--url-of "emacs") "https://duckduckgo.com/?q=emacs"))
+    (should (equal (canvas-browser--url-of "localhost") "http://localhost"))
+    (should (equal (canvas-browser--url-of "http://intranet/a") "http://intranet/a"))))
+
+(ert-deftest canvas-browser-o-offers-the-bookmarks-and-goes-there-here ()
+  ;; GIVEN a page buffer and a bookmark of another page
+  ;; WHEN o is pressed and the bookmark, words, or a host is picked
+  ;; THEN this buffer goes to the bookmark's address, a search, or the host
+  (canvas-browser-test--in-page
+    (let ((bookmark-alist (list (canvas-browser-test--bookmark "Other" "https://other.org/a")))
+          (canvas-browser-search-url "https://duckduckgo.com/?q=%s")
+          (offered nil))
+      (dolist (case '(("Other" . "https://other.org/a")
+                      ("emacs lisp" . "https://duckduckgo.com/?q=emacs%20lisp")
+                      ("www.vg.no" . "https://www.vg.no")))
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt collection _predicate require-match &rest _)
+                     (setq offered (list (all-completions "" collection) require-match))
+                     (car case))))
+          (call-interactively #'canvas-browser-open-url))
+        (should (equal '(("Other") nil) offered))
+        (should (equal (cdr case) canvas-browser--url))
+        (should (equal (cdr case) (plist-get (canvas-browser-test--params "Page.navigate") :url)))))))
 
 (ert-deftest canvas-browser-open-url-navigates-to-the-url-it-made ()
   ;; GIVEN a page buffer
@@ -1508,7 +1544,7 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
               canvas-browser--fresh-frames 5)
         (dotimes (_ canvas-browser--quiet-looks)
           (canvas-browser--keep-fresh (current-buffer)))
-        (should (string-search "g" said))
+        (should (string-search "r reads" said))
         (should (string-search "answer" said))))))
 
 
@@ -1530,16 +1566,19 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
       (set 'canvas-minimap-exclude-modes before))))
 
 (ert-deftest canvas-browser-the-menu-shows-what-the-settings-are ()
-  ;; GIVEN a page buffer shown as it is, and then shown dark
-  ;; WHEN the menu entry for the dark is read
+  ;; GIVEN a page buffer with the caret off, and then on
+  ;; WHEN the menu entry for the caret is read
   ;; THEN it says which way the setting stands, so the menu shows the
-  ;;      state rather than only the name of the key
+  ;;      state rather than only the name of the key, AND dark mode is
+  ;;      no entry of the menu
   (canvas-browser-test--in-page
-    (let ((description (plist-get (canvas-browser-test--menu-entry "d") :description)))
-      (setq canvas-browser-dark nil)
+    (let ((description (plist-get (canvas-browser-test--menu-entry "v") :description)))
+      (setq canvas-browser--caret nil)
       (should (string-search "off" (funcall description)))
-      (setq canvas-browser-dark t)
-      (should (string-search "on" (funcall description))))))
+      (setq canvas-browser--caret t)
+      (should (string-search "on" (funcall description)))
+      (setq canvas-browser--caret nil))
+    (should-not (canvas-browser-test--menu-entry "d"))))
 
 (ert-deftest canvas-browser-the-dark-is-a-setting-that-can-be-kept ()
   ;; GIVEN a page shown as it is
@@ -3291,15 +3330,26 @@ The window manager says so on the root window, where Emacs reads it."
 
 ;;;; Opening a page in a buffer of its own, and the name of a buffer
 
-(ert-deftest canvas-browser-capital-o-opens-a-url-in-a-buffer-of-its-own ()
+(ert-deftest canvas-browser-o-goes-here-and-capital-o-is-no-key ()
   ;; GIVEN a page buffer in normal state
-  ;; WHEN O is looked up, and the menu is read
-  ;; THEN O opens a page buffer of its own, as the O of Vimium and of
-  ;;      qutebrowser opens a tab, while o goes to the URL in this one
+  ;; WHEN o and O are looked up, and the menu is read
+  ;; THEN o goes to the URL in this buffer, AND O is no key, since t opens
+  ;;      a new tab
   (canvas-browser-test--in-page
-    (should (eq (key-binding (kbd "O")) #'canvas-browser))
     (should (eq (key-binding (kbd "o")) #'canvas-browser-open-url))
-    (should (equal (plist-get (canvas-browser-test--menu-entry "O") :description) "new"))))
+    (should (eq (key-binding (kbd "O")) 'undefined))
+    (should-not (canvas-browser-test--menu-entry "O"))))
+
+(ert-deftest canvas-browser-t-opens-a-new-tab-and-capital-t-the-text ()
+  ;; GIVEN a page buffer in normal state
+  ;; WHEN t and T are looked up, in the buffer and in the menu
+  ;; THEN t opens a page you kept, a URL or a search in a new tab, as the
+  ;;      t of Vimium does, AND T puts the text of the page in a buffer
+  (canvas-browser-test--in-page
+    (should (eq (key-binding (kbd "t")) #'canvas-browser-new-tab))
+    (should (eq (key-binding (kbd "T")) #'canvas-browser-text)))
+  (should (eq (plist-get (canvas-browser-test--menu-entry "t") :command) #'canvas-browser-new-tab))
+  (should (eq (plist-get (canvas-browser-test--menu-entry "T") :command) #'canvas-browser-text)))
 
 (ert-deftest canvas-browser-the-command-is-what-loads-the-package ()
   ;; GIVEN the source of the package
