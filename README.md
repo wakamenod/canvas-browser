@@ -113,23 +113,86 @@ Mac with Homebrew, from nothing.
    xcode-select --install    # clang, and the Swift of the display
    ```
 
-3. **The clones and the builds.** Clone the three as in
-   [Install](#install), canvas-browser from the fork. The Makefile of
-   canvas-diagram looks for `emacs-module.h` in `/usr/local/include`,
-   and Homebrew puts it in its own prefix, so the flags name that too:
+3. **The packages.** This configuration fetches and builds the three
+   with package-vc, and has Brave for the browser as step 4 says:
 
-   ```sh
-   make -C canvas-diagram \
-     CFLAGS="-O2 -Wall -Wextra -std=gnu11 -fPIC -I$(brew --prefix)/include"
-   make -C canvas-browser display
+   ```elisp
+   ;; package-vc runs :make and :shell-command only for the packages
+   ;; named here.
+   (setq package-vc-allow-build-commands '(canvas-diagram canvas-browser))
+
+   ;; canvas-keys and canvas-diagram are in no archive, so they come
+   ;; before canvas-browser.
+   (use-package canvas-keys
+     :vc (:url "https://github.com/Daskeladden/canvas-keys")
+     :defer t)
+
+   (use-package canvas-diagram
+     ;; The Makefile looks for emacs-module.h in /usr/local/include only,
+     ;; so name the include directory of Homebrew too.
+     :vc (:url "https://github.com/Daskeladden/canvas-diagram"
+          :shell-command "make CFLAGS='-O2 -Wall -Wextra -std=gnu11 -fPIC -I/opt/homebrew/include'")
+     :defer t)
+
+   (use-package canvas-browser
+     :vc (:url "https://github.com/wakamenod/canvas-browser" :make "display")
+     :commands (canvas-browser
+                canvas-browser-browse-url
+                canvas-browser-switch-tab
+                canvas-browser-open-bookmark-or-url
+                canvas-browser-install-ublock
+                canvas-browser-restart-chromium)
+     :custom
+     ;; The default on macOS, named here to show it.  Without the virtual
+     ;; display it falls back to offscreen, which leaves 40 pixels of
+     ;; chromium at the bottom right corner of the screen.
+     (canvas-browser-window-strategy 'virtual-display)
+     ;; Brave, in /Applications or in ~/Applications.
+     (canvas-browser-chromium
+      (list "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
+            (expand-file-name
+             "~/Applications/Brave Browser.app/Contents/MacOS/Brave Browser")))
+     ;; A profile of its own, apart from that of Chrome.
+     (canvas-browser-profile-directory
+      (expand-file-name "~/.cache/canvas-browser/profile-brave"))
+     (browse-url-browser-function #'canvas-browser-browse-url))
+
+   ;; canvas-keys copies a picture, as M-w in a page does, through
+   ;; kill-ring-images, which hands it to other programs only on X.  On
+   ;; macOS this function of the same name puts it on the clipboard.
+   (unless (or (fboundp 'kill-ring-images-copy)
+               (locate-library "kill-ring-images"))
+     (defun kill-ring-images-copy (type bytes)
+       "Put BYTES, an image of TYPE, on the macOS clipboard.
+   Only image/png is taken, which is what canvas-keys copies."
+       (unless (eq type 'image/png)
+         (user-error "Only a PNG can go on the clipboard here, not %s" type))
+       (let ((file (make-temp-file "canvas-picture-" nil ".png")))
+         (unwind-protect
+             (progn
+               (let ((coding-system-for-write 'binary))
+                 (write-region bytes nil file nil 'silent))
+               (unless (zerop (call-process
+                               "osascript" nil nil nil "-e"
+                               (format "set the clipboard to (read (POSIX file %S) as «class PNGf»)"
+                                       file)))
+                 (error "osascript could not put the picture on the clipboard")))
+           (delete-file file)))))
    ```
+
+   On an Intel Mac, Homebrew is in `/usr/local`, where the Makefile of
+   canvas-diagram looks already, so `:make "all"` does in place of its
+   `:shell-command`. To use clones as in [Install](#install) instead,
+   take canvas-browser from the fork, build canvas-diagram with
+   `make CFLAGS="-O2 -Wall -Wextra -std=gnu11 -fPIC -I$(brew --prefix)/include"`,
+   and put `:load-path` in place of each `:vc`.
 
 4. **A browser.** Google Chrome and Brave both work. Brave blocks ads
    by itself; Google Chrome no longer loads an extension from the command
    line, so `canvas-browser-install-ublock` does nothing for it. Give
    Brave a profile of its own, since a profile of Chrome keeps its
-   cookies under another key; [the configuration](#with-use-package)
-   below names both. A new profile of Brave fetches its lists of ads a little after it
+   cookies under another key; the configuration of step 3 names both.
+   A new profile of Brave fetches its lists of ads a little after it
    first starts, so ads show until chromium is next started.
 5. **Extensions from the Chrome Web Store.** Its dialog that adds an
    extension is drawn by the browser on the display nobody sees, so it
@@ -163,81 +226,6 @@ Mac with Homebrew, from nothing.
    fills the field; the button of the toolbar, its popup, its keyboard
    shortcuts and the dialogs of passkeys belong to the window, out of
    sight.
-
-#### With use-package
-
-This is the setup above in one place. It fetches and builds the three
-packages with package-vc in place of step 3, and has Brave for the
-browser as step 4 says. With the clones of step 3, put `:load-path` and
-the directory of each in place of `:vc`.
-
-```elisp
-;; package-vc runs :make and :shell-command only for the packages
-;; named here.
-(setq package-vc-allow-build-commands '(canvas-diagram canvas-browser))
-
-;; canvas-keys and canvas-diagram are in no archive, so they come
-;; before canvas-browser.
-(use-package canvas-keys
-  :vc (:url "https://github.com/Daskeladden/canvas-keys")
-  :defer t)
-
-(use-package canvas-diagram
-  ;; The Makefile looks for emacs-module.h in /usr/local/include only,
-  ;; so name the include directory of Homebrew too.
-  :vc (:url "https://github.com/Daskeladden/canvas-diagram"
-       :shell-command "make CFLAGS='-O2 -Wall -Wextra -std=gnu11 -fPIC -I/opt/homebrew/include'")
-  :defer t)
-
-(use-package canvas-browser
-  :vc (:url "https://github.com/wakamenod/canvas-browser" :make "display")
-  :commands (canvas-browser
-             canvas-browser-browse-url
-             canvas-browser-switch-tab
-             canvas-browser-open-bookmark-or-url
-             canvas-browser-install-ublock
-             canvas-browser-restart-chromium)
-  :custom
-  ;; The default on macOS, named here to show it.  Without the virtual
-  ;; display it falls back to offscreen, which leaves 40 pixels of
-  ;; chromium at the bottom right corner of the screen.
-  (canvas-browser-window-strategy 'virtual-display)
-  ;; Brave, in /Applications or in ~/Applications.
-  (canvas-browser-chromium
-   (list "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
-         (expand-file-name
-          "~/Applications/Brave Browser.app/Contents/MacOS/Brave Browser")))
-  ;; A profile of its own, apart from that of Chrome.
-  (canvas-browser-profile-directory
-   (expand-file-name "~/.cache/canvas-browser/profile-brave"))
-  (browse-url-browser-function #'canvas-browser-browse-url))
-
-;; canvas-keys copies a picture, as M-w in a page does, through
-;; kill-ring-images, which hands it to other programs only on X.  On
-;; macOS this function of the same name puts it on the clipboard.
-(unless (or (fboundp 'kill-ring-images-copy)
-            (locate-library "kill-ring-images"))
-  (defun kill-ring-images-copy (type bytes)
-    "Put BYTES, an image of TYPE, on the macOS clipboard.
-Only image/png is taken, which is what canvas-keys copies."
-    (unless (eq type 'image/png)
-      (user-error "Only a PNG can go on the clipboard here, not %s" type))
-    (let ((file (make-temp-file "canvas-picture-" nil ".png")))
-      (unwind-protect
-          (progn
-            (let ((coding-system-for-write 'binary))
-              (write-region bytes nil file nil 'silent))
-            (unless (zerop (call-process
-                            "osascript" nil nil nil "-e"
-                            (format "set the clipboard to (read (POSIX file %S) as «class PNGf»)"
-                                    file)))
-              (error "osascript could not put the picture on the clipboard")))
-        (delete-file file)))))
-```
-
-On an Intel Mac, Homebrew is in `/usr/local`, where the Makefile looks
-already, so `:make "all"` does for canvas-diagram in place of the
-`:shell-command`.
 
 ## Use
 
