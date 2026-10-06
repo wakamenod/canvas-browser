@@ -447,7 +447,10 @@ freshness check asks for one if none comes."
     (setq canvas-browser--live-timer nil))
   (when canvas-browser--live-boxes
     (setq canvas-browser--live-boxes nil
-          canvas-browser--crisp nil)))
+          canvas-browser--crisp nil)
+    ;; A frame held for the pace of the moving parts is drawn at the
+    ;; pace of the whole window now.
+    (canvas-browser--paint-pending-soon)))
 
 (defun canvas-browser--forget-live ()
   "Draw the whole window again from every frame, and put the still off.
@@ -457,6 +460,9 @@ last key, and one asked for before the command is dropped.  A page that
 says nothing moves on it is no command, and takes `canvas-browser--drop-live'."
   (cl-incf canvas-browser--commands)
   (setq canvas-browser--commanded (float-time))
+  ;; The frames held are answered now, so that chromium may send the one
+  ;; the command makes as soon as it is drawn, not after them.
+  (canvas-browser--answer-frame t)
   (canvas-browser--drop-live))
 
 (defun canvas-browser--paint-boxes (file boxes)
@@ -475,13 +481,6 @@ costs more than drawing the whole window would."
                         (plist-get (cdr canvas-browser--canvas) :data-width)
                         (plist-get (cdr canvas-browser--canvas) :data-height))
     (canvas-cairo-restore context)))
-
-(defun canvas-browser--frame (params)
-  "Take PARAMS of a screencast frame: paint it, and ask for the next."
-  (canvas-browser--tell "Page.screencastFrameAck"
-                        (list :sessionId (plist-get params :sessionId)))
-  (canvas-browser--paint-soon (plist-get params :data))
-  (canvas-browser--schedule-spots))
 
 (defvar-local canvas-browser--pending nil
   "The newest frame this buffer has not painted yet.")
@@ -506,16 +505,60 @@ it, and takes hardly any of the time of the page you are reading."
   :type 'number
   :group 'canvas-browser)
 
+(defcustom canvas-browser-live-frame-interval 0.25
+  "The shortest time between two drawings while only parts of the page move.
+A spinner beside a running job turns in a box of a few pixels, and every
+frame of it is the whole window, read and drawn in full: four a second
+turn it as well as twelve, at a third of the cost.  A key or a click
+draws the page at `canvas-browser-frame-interval\=' again."
+  :type 'number
+  :group 'canvas-browser)
+
 (defun canvas-browser--paint-delay ()
   "How long this buffer waits before it draws the frame it holds."
-  (let ((interval (if (canvas-browser--shown-p)
-                      canvas-browser-frame-interval
-                    canvas-browser-hidden-interval)))
+  (let ((interval (cond ((not (canvas-browser--shown-p)) canvas-browser-hidden-interval)
+                        (canvas-browser--live-boxes canvas-browser-live-frame-interval)
+                        (t canvas-browser-frame-interval))))
     (max 0 (- interval (- (float-time) canvas-browser--painted)))))
+
+(defun canvas-browser--paint-pending-soon ()
+  "Draw the frame held at the pace that holds now, not the one it was held for."
+  (when (timerp canvas-browser--paint-timer)
+    (cancel-timer canvas-browser--paint-timer)
+    (setq canvas-browser--paint-timer
+          (run-with-timer (canvas-browser--paint-delay) nil
+                          #'canvas-browser--paint-pending (current-buffer)))))
 
 (defvar-local canvas-browser--hinting nil
   "Whether the hints are on the canvas, waiting to be named.
 A frame painted then would paint over them.")
+
+(defvar-local canvas-browser--unanswered nil
+  "The screencast sessions of the frames not answered yet, one for each.
+Chromium holds back the next frame while frames it sent are not
+answered.  A frame painted answers one of them, so that chromium sends
+one more for each frame drawn, and a command answers them all, so that
+the frame it makes is not held back.")
+
+(defun canvas-browser--frame (params)
+  "Take PARAMS of a screencast frame: paint it, and answer it once painted.
+Chromium sends the next frame when a frame is answered.  Answered as it
+arrives, a frame brings sixty a second while a spinner turns, and all but
+the few painted are read for nothing; answered as it is painted, it
+brings no more than are drawn.  Under the hints nothing is painted, so a
+frame is answered at once, or the page would stand still after them."
+  (push (plist-get params :sessionId) canvas-browser--unanswered)
+  (canvas-browser--paint-soon (plist-get params :data))
+  (when canvas-browser--hinting
+    (canvas-browser--answer-frame t))
+  (canvas-browser--schedule-spots))
+
+(defun canvas-browser--answer-frame (&optional all)
+  "Tell chromium a frame is taken, or with ALL every one, so that it sends more."
+  (dotimes (_ (if all (length canvas-browser--unanswered)
+                (min 1 (length canvas-browser--unanswered))))
+    (canvas-browser--tell "Page.screencastFrameAck"
+                          (list :sessionId (pop canvas-browser--unanswered)))))
 
 (defun canvas-browser--paint-soon (data)
   "Paint DATA, the base64 of a frame, once Emacs has a moment for it.
@@ -533,6 +576,9 @@ than `canvas-browser-frame-interval\=' allows."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (setq canvas-browser--paint-timer nil)
+      ;; Answered before it is painted, so that chromium draws the next
+      ;; frame while Emacs draws this one.
+      (canvas-browser--answer-frame)
       (when-let* (((not canvas-browser--hinting))
                   (data canvas-browser--pending))
         (setq canvas-browser--pending nil
@@ -808,6 +854,8 @@ are killed, and a window change is no reason to start a browser."
 A screencast that runs is stopped first, because chromium answers a
 second one with an error that it is active already."
   (canvas-browser--stop-screencast)
+  ;; A new screencast counts its frames afresh.
+  (setq canvas-browser--unanswered nil)
   (canvas-browser--tell "Page.startScreencast"
                         (list :format "jpeg" :quality canvas-browser-quality
                               :maxWidth (car canvas-browser--size)

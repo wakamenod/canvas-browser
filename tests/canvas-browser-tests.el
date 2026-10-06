@@ -1317,6 +1317,80 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
       (setq canvas-browser--painted (- (float-time) 10))
       (should (= (canvas-browser--paint-delay) 0)))))
 
+(ert-deftest canvas-browser-a-frame-is-answered-as-it-is-painted ()
+  ;; GIVEN a page buffer
+  ;; WHEN a frame arrives, and then is painted
+  ;; THEN it is answered only once painted: chromium sends the next frame
+  ;;      on the answer, and a frame answered on arrival brings sixty a
+  ;;      second while a spinner turns, all but a few of them read for
+  ;;      nothing
+  (canvas-browser-test--in-page
+    (cl-letf (((symbol-function 'canvas-cairo-image) #'ignore)
+              ((symbol-function 'canvas-refresh) #'ignore))
+      (setq canvas-browser-test--commands nil)
+      (canvas-browser--frame (list :data (base64-encode-string "one") :sessionId "S1"))
+      (should-not (assoc "Page.screencastFrameAck" canvas-browser-test--commands))
+      (canvas-browser--paint-pending (current-buffer))
+      (should (= 1 (cl-count "Page.screencastFrameAck" canvas-browser-test--commands
+                             :key #'car :test #'equal))))))
+
+(ert-deftest canvas-browser-a-frame-under-the-hints-is-answered-at-once ()
+  ;; GIVEN a page whose hints are on the canvas, so that nothing is painted
+  ;; WHEN a frame arrives
+  ;; THEN it is answered at once, or chromium would send no more frames
+  ;;      and the page would stand still after the hints
+  (canvas-browser-test--in-page
+    (setq canvas-browser--hinting t
+          canvas-browser-test--commands nil)
+    (canvas-browser--frame (list :data (base64-encode-string "one") :sessionId "S1"))
+    (should (equal (plist-get (canvas-browser-test--params "Page.screencastFrameAck")
+                              :sessionId)
+                   "S1"))))
+
+(ert-deftest canvas-browser-a-page-with-moving-parts-is-drawn-at-their-pace ()
+  ;; GIVEN a page shown, whose only moving part is a spinner
+  ;; WHEN the wait before the next drawing is worked out
+  ;; THEN it is the pace of the moving parts, longer than that of a page
+  ;;      being worked on: every frame is the whole window, read and drawn
+  ;;      in full, for a box of a few pixels
+  (canvas-browser-test--in-page
+    (cl-letf (((symbol-function 'get-buffer-window) (lambda (&rest _) 'a-window)))
+      (setq canvas-browser--live-boxes '((:x 30 :y 90 :w 30 :h 30))
+            canvas-browser--painted (float-time))
+      (should (> (canvas-browser--paint-delay) canvas-browser-frame-interval))
+      (should (<= (canvas-browser--paint-delay) canvas-browser-live-frame-interval)))))
+
+(ert-deftest canvas-browser-a-command-brings-the-frame-held-forward ()
+  ;; GIVEN a page with a spinner, holding a frame for the slow pace
+  ;; WHEN a command runs in it, as a scroll key does
+  ;; THEN the frame is drawn at the pace of a page being worked on, so the
+  ;;      first frame of the scroll does not wait for the spinner's pace
+  (canvas-browser-test--in-page
+    (cl-letf (((symbol-function 'get-buffer-window) (lambda (&rest _) 'a-window)))
+      (setq canvas-browser--live-boxes '((:x 30 :y 90 :w 30 :h 30))
+            canvas-browser--painted (float-time))
+      (canvas-browser--frame (list :data (base64-encode-string "one") :sessionId "S1"))
+      (let ((wait (lambda () (- (float-time (timer--time canvas-browser--paint-timer))
+                                (float-time)))))
+        (should (> (funcall wait) canvas-browser-frame-interval))
+        (canvas-browser--forget-live)
+        (should (<= (funcall wait) canvas-browser-frame-interval))))))
+
+(ert-deftest canvas-browser-a-command-answers-the-frames-held ()
+  ;; GIVEN two frames that arrived and are not painted yet
+  ;; WHEN a command runs in the page, as a scroll key does
+  ;; THEN both are answered at once: chromium holds back the next frame
+  ;;      while frames are not answered, and the next is the one the
+  ;;      command makes
+  (canvas-browser-test--in-page
+    (setq canvas-browser-test--commands nil)
+    (canvas-browser--frame (list :data (base64-encode-string "one") :sessionId "S1"))
+    (canvas-browser--frame (list :data (base64-encode-string "two") :sessionId "S1"))
+    (should-not (assoc "Page.screencastFrameAck" canvas-browser-test--commands))
+    (canvas-browser--forget-live)
+    (should (= 2 (cl-count "Page.screencastFrameAck" canvas-browser-test--commands
+                           :key #'car :test #'equal)))))
+
 (ert-deftest canvas-browser-a-page-nobody-looks-at-is-drawn-rarely ()
   ;; GIVEN a page buffer that no window shows, painting all the while
   ;; WHEN the wait before the next drawing is worked out

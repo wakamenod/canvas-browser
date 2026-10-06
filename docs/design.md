@@ -108,6 +108,20 @@ for ever, which the reader sees as a pulse around small text. A frame
 that is the picture the canvas already holds is therefore dropped, which
 is told by the md5 of its bytes.
 
+A frame is answered as it is painted, not as it arrives. Chromium holds
+back the next frame while the frames it sent are not answered, so a
+frame answered on arrival brought every frame chromium drew, and Emacs
+read them all to paint about one in three. A command answers every frame held,
+so the frame it makes is not held back behind them. While only parts of
+the page move, a frame is drawn every `canvas-browser-live-frame-interval`,
+a quarter of a second, rather than every `canvas-browser-frame-interval`:
+a spinner turns as well at four frames a second, and each frame is still
+the whole window, read in full. Measured with a spinner on a page of
+919 by 829 pixels on a Retina screen, twice each: Emacs took a whole core
+before, reading 41 frames a second to paint 12, and a quarter of one
+after, reading and painting 4. The first frame after a scroll key came
+in 66 and 81 ms at the median, against 157 and 124 ms before.
+
 The numbers of one window of 1874 by 921 pixels: a JPEG at quality 70 is
 120 kB and takes 0.10 s, the same picture at quality 95 is 235 kB, and
 the PNG is 228 kB and takes 0.22 s. The PNG is therefore too slow for
