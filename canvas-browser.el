@@ -3840,17 +3840,23 @@ made in this one, so that they stand to the left of the new page."
 
 ;;;###autoload
 (defun canvas-browser (url)
-  "Open URL in a page buffer of its own."
+  "Open URL in a page buffer of its own.
+A tab of the last session that waits at URL is shown instead, and read
+then: a page opened in every session would else come back once more each
+time."
   (interactive "sURL: ")
-  (let* ((url (canvas-browser--reachable-url url))
-         (buffer (canvas-browser--page-buffer url)))
-    (pop-to-buffer buffer)
-    (with-current-buffer buffer
-      (let ((window (get-buffer-window buffer)))
-        (canvas-browser--open url
-                              (window-body-width window t)
-                              (window-body-height window t))))
-    buffer))
+  (let ((url (canvas-browser--reachable-url url)))
+    (canvas-browser--restore-tabs-once)
+    (if-let* ((waiting (canvas-browser--waiting-tab-at url)))
+        (progn (pop-to-buffer waiting) waiting)
+      (let ((buffer (canvas-browser--page-buffer url)))
+        (pop-to-buffer buffer)
+        (with-current-buffer buffer
+          (let ((window (get-buffer-window buffer)))
+            (canvas-browser--open url
+                                  (window-body-width window t)
+                                  (window-body-height window t))))
+        buffer))))
 
 ;;;; The tabs of the pages
 
@@ -4548,6 +4554,13 @@ tab that was shown last, or the last tab, or nil when none came back."
          (buffers (mapcar #'canvas-browser--waiting-tab (plist-get kept :tabs))))
     (or (and (natnump current) (nth current buffers))
         (car (last (delq nil buffers))))))
+
+(defun canvas-browser--waiting-tab-at (url)
+  "The tab of the last session that waits at URL, not read yet, or nil."
+  (seq-find (lambda (buffer)
+              (and (buffer-local-value 'canvas-browser--waiting buffer)
+                   (equal (buffer-local-value 'canvas-browser--url buffer) url)))
+            (canvas-browser--tab-buffers)))
 
 (defun canvas-browser--restore-tabs-once ()
   "Bring the tabs of the last session back, if that is wanted and not done."

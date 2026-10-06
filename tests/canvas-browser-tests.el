@@ -5794,6 +5794,35 @@ Icons are fetched by nobody: the addresses asked for go to `fetched'."
       (should (equal (canvas-browser-test--tab-urls) '("https://a.org/")))
       (should-not (assoc "Target.createTarget" canvas-browser-test--commands)))))
 
+(ert-deftest canvas-browser-a-link-shows-its-tab-that-came-back ()
+  ;; GIVEN a tab kept from the last session
+  ;; WHEN a link to its page is the first page opened, as a page opened
+  ;;      in every session is
+  ;; THEN the tab that came back is shown, and no second one opens: else
+  ;;      each session would keep one more of it
+  (canvas-browser-test--keeping-tabs
+    (canvas-browser-test--keep '(("https://a.org/" "A" nil)) 0)
+    (canvas-browser-test--with-chromium
+      (cl-letf (((symbol-function 'canvas-browser-can-show-p) (lambda () t)))
+        (canvas-browser-browse-url "https://a.org/"))
+      (should (equal (canvas-browser-test--tab-urls) '("https://a.org/")))
+      (should (eq (window-buffer) (car (canvas-browser--tab-buffers))))
+      (should-not (assoc "Target.createTarget" canvas-browser-test--commands)))))
+
+(ert-deftest canvas-browser-a-link-to-a-tab-read-already-opens-another ()
+  ;; GIVEN a tab that came back and has been read
+  ;; WHEN its page is opened again
+  ;; THEN a second tab opens, as a link opens one in a browser
+  (canvas-browser-test--keeping-tabs
+    (canvas-browser-test--keep '(("https://a.org/" "A" nil)) 0)
+    (with-current-buffer (canvas-browser--restore-tabs)
+      (setq canvas-browser--waiting nil))
+    (canvas-browser-test--with-chromium
+      (canvas-browser "https://a.org/")
+      (should (equal (canvas-browser-test--tab-urls) '("https://a.org/" "https://a.org/")))
+      (should (= 1 (cl-count "Target.createTarget" canvas-browser-test--commands
+                             :key #'car :test #'equal))))))
+
 (ert-deftest canvas-browser-restoring-the-tabs-shows-the-one-shown-last ()
   ;; GIVEN three tabs kept, the second shown last
   ;; WHEN the tabs are restored by the command, and then again

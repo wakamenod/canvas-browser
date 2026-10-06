@@ -602,8 +602,10 @@ loaded only when you use it. They come back to the left of the page you
 open. A tab that comes back shows its title and its icon, which Emacs
 fetches itself, and nothing more: no window opens for it, and neither
 chromium nor its page is started. Its page is read when you show the
-tab, by a click, `C-c C-t`, `C-<next>` or any other way. Closing a tab
-that was never read starts nothing either.
+tab, by a click, `C-c C-t`, `C-<next>` or any other way. A link or a
+bookmark to the page of a tab not read yet shows that tab, and opens no
+second one, so a page you open in every session comes back once.
+Closing a tab that was never read starts nothing either.
 
 `M-x canvas-browser-restore-tabs` brings the tabs back without opening
 a page, and shows the tab you were in last; that tab alone is read. The
