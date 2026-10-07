@@ -554,11 +554,17 @@ frame is answered at once, or the page would stand still after them."
   (canvas-browser--schedule-spots))
 
 (defun canvas-browser--answer-frame (&optional all)
-  "Tell chromium a frame is taken, or with ALL every one, so that it sends more."
-  (dotimes (_ (if all (length canvas-browser--unanswered)
-                (min 1 (length canvas-browser--unanswered))))
-    (canvas-browser--tell "Page.screencastFrameAck"
-                          (list :sessionId (pop canvas-browser--unanswered)))))
+  "Tell chromium a frame is taken, or with ALL every one, so that it sends more.
+The frames of a chromium that has gone are forgotten, not answered: an
+answer told the page would bring it back, and start chromium again for
+nothing the reader asked."
+  (if (not (and canvas-browser--session (canvas-browser-cdp-running-p)))
+      (setq canvas-browser--unanswered nil)
+    (dotimes (_ (if all (length canvas-browser--unanswered)
+                  (min 1 (length canvas-browser--unanswered))))
+      (canvas-browser-cdp-send "Page.screencastFrameAck"
+                               (list :sessionId (pop canvas-browser--unanswered))
+                               nil canvas-browser--session))))
 
 (defun canvas-browser--paint-soon (data)
   "Paint DATA, the base64 of a frame, once Emacs has a moment for it.

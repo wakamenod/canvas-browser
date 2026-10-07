@@ -1376,6 +1376,27 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
         (canvas-browser--forget-live)
         (should (<= (funcall wait) canvas-browser-frame-interval))))))
 
+(ert-deftest canvas-browser-frames-held-from-a-chromium-gone-are-not-answered ()
+  ;; GIVEN a frame not answered yet, and then chromium stopped
+  ;; WHEN a command runs in the page, or the frame held is painted
+  ;; THEN nothing is sent and the page is not brought back: a frame of a
+  ;;      chromium that has gone needs no answer, and starting chromium
+  ;;      again for one would start it behind the reader's back
+  (canvas-browser-test--in-page
+    (cl-letf (((symbol-function 'canvas-cairo-image) #'ignore)
+              ((symbol-function 'canvas-refresh) #'ignore))
+      (canvas-browser--frame (list :data (base64-encode-string "one") :sessionId "S1"))
+      (setq canvas-browser-test--commands nil)
+      (let ((brought nil))
+        (cl-letf (((symbol-function 'canvas-browser-cdp-running-p) #'ignore)
+                  ((symbol-function 'canvas-browser--bring-back)
+                   (lambda (&rest _) (setq brought t))))
+          (canvas-browser--forget-live)
+          (canvas-browser--paint-pending (current-buffer)))
+        (should-not brought)
+        (should-not canvas-browser-test--commands)
+        (should-not canvas-browser--unanswered)))))
+
 (ert-deftest canvas-browser-a-command-answers-the-frames-held ()
   ;; GIVEN two frames that arrived and are not painted yet
   ;; WHEN a command runs in the page, as a scroll key does
