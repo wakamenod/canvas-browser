@@ -1307,7 +1307,7 @@ reaches the page as an event that deletes and moves nothing.")
     ;; A chat sends on Enter and breaks the line on Shift and Enter, and
     ;; many a form is sent with Control and Enter.
     ("S-<return>" "Enter" shift) ("C-<return>" "Enter" control) ("C-j" "Enter")
-    ("C-v" "PageDown") ("M-v" "PageUp")
+    ("C-v" "PageDown")
     ("M-{" "ArrowUp" control) ("M-}" "ArrowDown" control))
   "The keys of insert state that go to the page as a key rather than text.
 Each is the key in Emacs, the name of the key it is in a browser, and
@@ -3033,8 +3033,9 @@ and the settings.  The widths line the columns of the two rows up."
   "Keymap of a page buffer in normal state.
 The common canvas keys come from canvas-keys: `SPC\=' opens the menu,
 `q\=' quits, `W\=' writes the picture, `C\=' customizes, and the zoom
-keys zoom the page.  `r\=' reads the page again, as `g\=', which is
-`revert-buffer\=', does.")
+keys zoom the page.  `r\=' reads the page again; `g\=' is no
+`revert-buffer\=' here, since `g g\=' goes to the top of the page and
+`G\=' to its foot, as in Vimium.")
 
 ;; The keys are bound here and not where the map is made.  A variable
 ;; keeps its value when its file is loaded again, so keys bound there
@@ -3084,6 +3085,9 @@ keys zoom the page.  `r\=' reads the page again, as `g\=', which is
   "<prior>" #'canvas-browser-scroll-down
   "<home>" #'canvas-browser-beginning-of-page
   "<end>" #'canvas-browser-end-of-page
+  ;; The ends of the page as Vimium has them.
+  "g g" #'canvas-browser-beginning-of-page
+  "G" #'canvas-browser-end-of-page
   ;; The tab keys of a browser; `C-TAB' stays with `tab-bar-mode'.
   "C-<next>" #'tab-line-switch-to-next-tab
   "C-<prior>" #'tab-line-switch-to-prev-tab
@@ -3656,6 +3660,8 @@ here, on every load."
     (define-key map (kbd (car key)) #'canvas-browser-send-key))
   (define-key map (kbd "C-k") #'canvas-browser-kill-line)
   (define-key map (kbd "C-y") #'canvas-browser-yank)
+  ;; Command-V of a browser, where Command is Meta.
+  (define-key map (kbd "M-v") #'canvas-browser-yank)
   (define-key map (kbd "S-<insert>") #'canvas-browser-yank)
   (define-key map [mouse-2] #'canvas-browser-yank)
   (dolist (key '("C-/" "C-_" "C-x u"))

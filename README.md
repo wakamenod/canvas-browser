@@ -330,13 +330,13 @@ Normal state keeps the keys of Emacs:
 | `C-c C-t` | choose a tab by its title or address, from a list with the icons |
 | `x` | closes this tab, and shows the one to its right |
 | `X` | opens again the tab closed last, in its place among the tabs |
-| `r` | reads the page again, as `g` does |
+| `r` | reads the page again |
 | `M-p`, `M-n` | go back and forward in the history |
 | `j`, `k` | scroll a line further down and back |
 | `d`, `u` | scroll a screen further down and back |
 | `C-v`, `M-v`, the arrows | scroll a screen and a line |
 | `<prior>`, `<next>` | scroll a screen back and further down |
-| `<home>`, `<end>`, `C-<home>`, `C-<end>`, `M-<`, `M->` | go to the top and the foot of the page |
+| `g g`, `G`, `<home>`, `<end>`, `C-<home>`, `C-<end>`, `M-<`, `M->` | go to the top and the foot of the page |
 | `f` | labels what a click can reach, fields inside web components included, and clicks the one you name; the labels stay until you name one or press `ESC` |
 | `M-w` | labels the blocks of the page, and copies the picture of the one you name; `C-u M-w` copies the whole window |
 | `S` | labels the parts of the page that scroll on their own, and sends the scroll keys to the one you name |
@@ -438,13 +438,13 @@ and the insert mode of Surfingkeys have them do:
 | `C-f`, `C-b`, `C-n`, `C-p` | a character right and left, a line down and up |
 | `M-f`, `M-b`, `C-<right>`, `C-<left>` | a word right and left |
 | `C-<up>`, `C-<down>`, `M-{`, `M-}` | a paragraph up and down |
-| `C-v`, `M-v` | a page down and up |
+| `C-v` | a page down |
 | Shift with an arrow, `<home>` or `<end>` | mark while you move, as in a browser |
 | `M-<`, `M->` | the start and the end of the field |
 | `DEL`, `C-d` | delete the character before and after the cursor |
 | `M-DEL`, `M-d`, `C-<backspace>`, `C-<delete>` | delete the word before and after the cursor |
 | `C-k` | kill to the end of the line, and at its end the line break |
-| `C-y`, `S-<insert>`, the middle button | type the newest kill of Emacs |
+| `C-y`, `M-v`, `S-<insert>`, the middle button | type the newest kill of Emacs, `M-v` as Command-V does |
 | `C-/`, `C-x u`, `C-?` | undo, and do again |
 | `S-<return>` | a line break where Enter alone sends, as in a chat |
 | `C-<return>` | Control and Enter, which send many a form |

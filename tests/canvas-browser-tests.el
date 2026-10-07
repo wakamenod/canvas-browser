@@ -161,7 +161,8 @@ that moment now."
   ;; WHEN the keys are looked up
   ;; THEN they run the commands of the package, not the page
   (canvas-browser-test--in-page
-    (should (eq (key-binding (kbd "g")) #'revert-buffer))
+    ;; `g' begins `g g', the top of the page, and reads nothing again.
+    (should (keymapp (key-binding (kbd "g"))))
     (should (eq (key-binding (kbd "r")) #'canvas-browser-refresh))
     (should (eq (plist-get (canvas-browser-test--menu-entry "r") :command) #'canvas-browser-refresh))
     (should-not (canvas-browser-test--menu-entry "g"))
@@ -1181,6 +1182,26 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
     (dolist (key '("C-<end>" "M->"))
       (ert-info (key :prefix "Key: ")
         (should (eq (key-binding (kbd key)) 'canvas-browser-end-of-page))))))
+
+(ert-deftest canvas-browser-gg-and-G-go-to-the-ends-of-the-page ()
+  ;; GIVEN a page buffer
+  ;; WHEN `g g' and `G' are looked up
+  ;; THEN they go to the top and the foot of the page, as in Vimium; the
+  ;;      page is read again with `r'
+  (canvas-browser-test--in-page
+    (should (eq (key-binding (kbd "g g")) 'canvas-browser-beginning-of-page))
+    (should (eq (key-binding (kbd "G")) 'canvas-browser-end-of-page))
+    (should (eq (key-binding (kbd "r")) 'canvas-browser-refresh))))
+
+(ert-deftest canvas-browser-M-v-pastes-in-a-field ()
+  ;; GIVEN the keys of insert state, where a field of the page has them
+  ;; WHEN `M-v' is looked up
+  ;; THEN it types the newest kill, as `C-y' does, as Command-V does in
+  ;;      a browser; in normal state it still scrolls a screen back
+  (should (eq (keymap-lookup canvas-browser-insert-map "M-v") 'canvas-browser-yank))
+  (should (eq (keymap-lookup canvas-browser-insert-map "C-y") 'canvas-browser-yank))
+  (canvas-browser-test--in-page
+    (should (eq (key-binding (kbd "M-v")) 'canvas-browser-scroll-down))))
 
 (ert-deftest canvas-browser-the-top-of-the-page-is-the-top-of-the-page ()
   ;; GIVEN a page scrolled down
@@ -2740,7 +2761,8 @@ the second those drawn into the moving parts alone."
                     ;; A line break that does not send, and the key that sends.
                     ("S-<return>" "Enter" 8) ("C-<return>" "Enter" 2)
                     ("C-j" "Enter" 0)
-                    ("C-v" "PageDown" 0) ("M-v" "PageUp" 0)
+                    ;; `M-v' pastes, as Command-V does in a browser.
+                    ("C-v" "PageDown" 0)
                     ("M-{" "ArrowUp" 2) ("M-}" "ArrowDown" 2)))
       (setq canvas-browser-test--commands nil)
       (canvas-browser-test--press (car case))
