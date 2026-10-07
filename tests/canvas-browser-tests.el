@@ -5369,20 +5369,82 @@ They are killed afterwards, and the icons known are forgotten."
         (should (string-prefix-p "A title" first))
         (should (equal second "e.org/a"))))))
 
+(defmacro canvas-browser-test--measuring-tabs (&rest body)
+  "Run BODY with a window 800 pixels wide and a column of the tabs 10 wide.
+The width worked out last is forgotten before and after."
+  (declare (indent 0))
+  `(let ((canvas-browser-tab-width 20)
+         (canvas-browser-tabs-fit t)
+         (canvas-browser-tab-icons nil)
+         (canvas-browser--title-width nil))
+     (cl-letf (((symbol-function 'window-pixel-width) (lambda (&rest _) 800))
+               ((symbol-function 'string-pixel-width)
+                (lambda (string &rest _) (* 10 (string-width string)))))
+       ,@body)))
+
+(defun canvas-browser-test--titled-pages (titles)
+  "Page buffers titled TITLES, killed by the caller."
+  (mapcar (lambda (title)
+            (let ((buffer (generate-new-buffer "*page*")))
+              (with-current-buffer buffer
+                (canvas-browser-mode)
+                (setq canvas-browser--title title))
+              buffer))
+          titles))
+
+(defun canvas-browser-test--line-width (pages width)
+  "The pixels of the line of tabs of PAGES, each title cut to WIDTH."
+  (cl-letf (((symbol-function 'canvas-browser--tab-title-width) (lambda (_) width)))
+    (with-current-buffer (car pages)
+      ;; The parts of the line as they are: a batch Emacs formats no
+      ;; line of tabs.
+      (string-pixel-width (mapconcat (lambda (part) (if (stringp part) part ""))
+                                     (tab-line-format-template pages) "")))))
+
 (ert-deftest canvas-browser-the-tabs-narrow-to-fit-the-window ()
-  ;; GIVEN a window 800 pixels wide, and a character of the tabs 10 wide
-  ;; WHEN there are two tabs, four, and forty
-  ;; THEN two show the whole width, four show less, forty show nothing of
-  ;;      the title, AND with the fitting off every tab shows the whole width
-  (let ((canvas-browser-tab-width 20)
-        (canvas-browser-tabs-fit t))
-    (cl-letf (((symbol-function 'window-pixel-width) (lambda (&rest _) 800))
-              ((symbol-function 'string-pixel-width) (lambda (string &rest _) (* 10 (length string)))))
-      (should (= 20 (canvas-browser--tab-title-width 2)))
-      (should (= 4 (canvas-browser--tab-title-width 4)))
-      (should (= 0 (canvas-browser--tab-title-width 40)))
-      (let ((canvas-browser-tabs-fit nil))
-        (should (= 20 (canvas-browser--tab-title-width 40)))))))
+  ;; GIVEN a window 800 pixels wide, and tabs whose titles are long
+  ;; WHEN there are two tabs, and six
+  ;; THEN two show the whole width, AND six show less: as much as keeps the
+  ;;      line of tabs in the window, and not a column less
+  (canvas-browser-test--measuring-tabs
+    (let ((two (canvas-browser-test--titled-pages (make-list 2 (make-string 40 ?a))))
+          (six (canvas-browser-test--titled-pages (make-list 6 (make-string 40 ?a)))))
+      (unwind-protect
+          (progn
+            (should (= 20 (with-current-buffer (car two) (canvas-browser--tab-title-width two))))
+            (let ((width (with-current-buffer (car six) (canvas-browser--tab-title-width six))))
+              (should (< 1 width 20))
+              (should (<= (canvas-browser-test--line-width six width) 800))
+              (should (> (canvas-browser-test--line-width six (1+ width)) 800))))
+        (mapc #'kill-buffer (append two six))))))
+
+(ert-deftest canvas-browser-a-short-title-leaves-its-room-to-the-others ()
+  ;; GIVEN six tabs in a window 800 pixels wide, five of them with short
+  ;;       titles, as GitHub or X
+  ;; WHEN the width of the titles is worked out
+  ;; THEN it is wider than for six long titles: a short title leaves room
+  ;;      it does not use to the long ones, as the tabs of a browser do
+  (canvas-browser-test--measuring-tabs
+    (let ((long (canvas-browser-test--titled-pages (make-list 6 (make-string 40 ?a))))
+          (mixed (canvas-browser-test--titled-pages
+                  (cons (make-string 40 ?a) (make-list 5 "X")))))
+      (unwind-protect
+          (should (> (with-current-buffer (car mixed) (canvas-browser--tab-title-width mixed))
+                     (with-current-buffer (car long) (canvas-browser--tab-title-width long))))
+        (mapc #'kill-buffer (append long mixed))))))
+
+(ert-deftest canvas-browser-too-many-tabs-show-no-title ()
+  ;; GIVEN forty tabs in a window 800 pixels wide
+  ;; WHEN the width of the titles is worked out
+  ;; THEN it is none, AND with the fitting off it is the whole width
+  (canvas-browser-test--measuring-tabs
+    (let ((pages (canvas-browser-test--titled-pages (make-list 40 "A title"))))
+      (unwind-protect
+          (with-current-buffer (car pages)
+            (should (= 0 (canvas-browser--tab-title-width pages)))
+            (let ((canvas-browser-tabs-fit nil))
+              (should (= 20 (canvas-browser--tab-title-width pages)))))
+        (mapc #'kill-buffer pages)))))
 
 (ert-deftest canvas-browser-a-narrow-tab-shows-its-icon-alone ()
   ;; GIVEN so many tabs that a tab has no room for its title

@@ -558,7 +558,8 @@ are left as they are. The tabs keep the order the pages were opened in.
 A tab shows the icon and the title of its page, cut to
 `canvas-browser-tab-width` characters, and its address until the page
 has given a title. As more pages open, the tabs narrow so that all of
-them fit in the window, as in Chrome, down to the icon alone.
+them fit in the window, as in Chrome, down to the icon alone. A short
+title leaves the room it does not use to the long ones.
 
 A click on a tab shows its page in that window. Its `×` kills the page,
 and a window that showed it shows the tab to its right, or to its left

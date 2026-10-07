@@ -3941,24 +3941,86 @@ icon alone, as the tabs of a browser do.  Off, every tab shows the whole
   :type 'boolean
   :group 'canvas-browser)
 
-(defconst canvas-browser--tab-frame 14
-  "The columns of a tab besides its title: the spaces, the icon, `×\=',
-the edges and the gap to the next tab, as measured on a tab line.")
+(defvar canvas-browser--measuring-tab nil
+  "Whether a tab is drawn to be measured, which shows no title then.")
 
-(defun canvas-browser--tab-title-width (count)
-  "How many characters of its title each of COUNT tabs shows.
-The window is measured in pixels, and a character in the width of one
-of the text of the tabs, which is smaller than the text of the buffer
-and may be of another font; the `+\=' of the line takes three of them."
-  (let ((most canvas-browser-tab-width))
-    (if (not (and canvas-browser-tabs-fit count (> count 0)))
+(defvar canvas-browser--title-width nil
+  "The width last worked out for the titles of a line of tabs, as (KEY . WIDTH).
+tab-line names the tabs of a line one by one, and they all take the same
+width, which is worked out once.")
+
+(defun canvas-browser--tab-title (buffer)
+  "The title of BUFFER's page, whole, or its address while it has said none."
+  (with-current-buffer buffer
+    (string-trim (replace-regexp-in-string
+                  "[\n\t]+" " " (or canvas-browser--title canvas-browser--url (buffer-name))))))
+
+(defun canvas-browser--cut-title (title width)
+  "TITLE cut to WIDTH columns, with an ellipsis where it is cut."
+  (truncate-string-to-width title (max width 1) nil nil t))
+
+(defun canvas-browser--tab-pixels (string)
+  "The pixels STRING takes on the line of tabs of this buffer."
+  (string-pixel-width string (current-buffer)))
+
+(defun canvas-browser--title-pixels (title)
+  "The pixels TITLE takes in a tab.
+It is measured in the face of a tab as this buffer draws it, which takes
+the height of `tab-line\=' as well as that of `canvas-browser-tab-line\='."
+  (canvas-browser--tab-pixels (propertize title 'face 'tab-line-tab-inactive)))
+
+(defun canvas-browser--fit-titles (buffers titles most)
+  "The most columns, up to MOST, that TITLES of BUFFERS show with all their
+tabs in the window, or 0 when even two columns would not fit.
+A tab is measured as tab-line draws it, with no title, so that its
+spaces, its icon, its `×\=' and the gap before it are counted as they
+are; the `+\=' of the line is taken from the room first."
+  (let* ((separator (or tab-line-separator (if (window-system) " " "|")))
+         (frame (let ((canvas-browser--measuring-tab t))
+                  (canvas-browser--tab-pixels
+                   (concat separator
+                           (funcall tab-line-tab-name-format-function (car buffers) buffers)))))
+         ;; A tab with an icon puts a space between it and the title.
+         (space (if canvas-browser-tab-icons (canvas-browser--title-pixels " ") 0))
+         (room (- (window-pixel-width) (window-scroll-bar-width) (window-right-divider-width)
+                  (canvas-browser--tab-pixels
+                   (concat separator (or (and tab-line-new-button-show tab-line-new-button) "")))
+                  ;; Room for a column the measuring missed.
+                  (canvas-browser--title-pixels "n")))
+         (fits (lambda (width)
+                 (<= (cl-loop for title in titles
+                              sum (+ frame space
+                                     (canvas-browser--title-pixels
+                                      (canvas-browser--cut-title title width))))
+                     room))))
+    (if (funcall fits most)
         most
-      (let* ((char (max 1.0 (/ (string-pixel-width
-                                (propertize (make-string 10 ?n) 'face 'canvas-browser-tab-line))
-                               10.0)))
-             (room (- (window-pixel-width) (* 3 char)))
-             (each (floor (- (/ room count) (* canvas-browser--tab-frame char)) char)))
-        (max 0 (min most (1- each)))))))
+      ;; LOW fits, or is 1, which shows no title; HIGH does not fit.
+      (let ((low 1) (high most))
+        (while (> (- high low) 1)
+          (let ((middle (/ (+ low high) 2)))
+            (if (funcall fits middle) (setq low middle) (setq high middle))))
+        (if (< low 2) 0 low)))))
+
+(defun canvas-browser--tab-title-width (buffers)
+  "How many columns of its title each tab of BUFFERS shows.
+As many as the window has room for, up to `canvas-browser-tab-width\=',
+with every tab measured as tab-line draws it: a title shorter than that
+leaves the room it does not use to the others, as the tabs of a browser
+do.  At 0 a tab with an icon shows the icon alone."
+  (let ((most canvas-browser-tab-width))
+    (cond
+     (canvas-browser--measuring-tab 0)
+     ((not (and canvas-browser-tabs-fit buffers)) most)
+     (t
+      (let* ((titles (mapcar #'canvas-browser--tab-title buffers))
+             (key (list (window-pixel-width) (default-font-width) most
+                        canvas-browser-tab-icons titles)))
+        (if (equal (car canvas-browser--title-width) key)
+            (cdr canvas-browser--title-width)
+          (let ((width (canvas-browser--fit-titles buffers titles most)))
+            (setq canvas-browser--title-width (cons key width))
+            width)))))))
 
 (defface canvas-browser-tab-line
   '((((class color) (min-colors 88) (background light))
@@ -4059,15 +4121,13 @@ A page that has not said its title yet is named by its address.  The
 title is cut so that the tabs of BUFFERS all fit in the window; see
 `canvas-browser-tabs-fit\='.  At the narrowest a tab with an icon shows
 the icon alone."
-  (let ((width (canvas-browser--tab-title-width (length buffers))))
+  (let ((width (canvas-browser--tab-title-width buffers)))
     (with-current-buffer buffer
-      (let* ((title (string-trim
-                     (replace-regexp-in-string
-                      "[\n\t]+" " " (or canvas-browser--title canvas-browser--url (buffer-name)))))
-             (icon (and canvas-browser-tab-icons (canvas-browser--tab-icon)))
-             (shown (if (and (< width 2) icon (not (string-empty-p icon)))
-                        ""
-                      (truncate-string-to-width title (max width 1) nil nil t))))
+      (let* ((icon (and canvas-browser-tab-icons (canvas-browser--tab-icon)))
+             (shown (cond (canvas-browser--measuring-tab "")
+                          ((and (< width 2) icon (not (string-empty-p icon))) "")
+                          (t (canvas-browser--cut-title (canvas-browser--tab-title buffer)
+                                                        width)))))
         (concat " "
                 (when icon (concat icon (unless (string-empty-p shown) " ")))
                 shown
@@ -4079,7 +4139,7 @@ Tab-line draws the line again when the buffers change, but the title of
 a page and its icon change in a buffer that stays.  The default keys
 come first, since tab-line reads two of them by their place."
   (append (tab-line-cache-key-default tabs)
-          (list (window-total-width))
+          (list (window-pixel-width))
           (list (mapcar (lambda (buffer)
                           (with-current-buffer buffer
                             (list canvas-browser--title canvas-browser--url
