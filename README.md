@@ -326,21 +326,20 @@ Normal state keeps the keys of Emacs:
 | `o` | opens a page you kept, a URL, or a search for the words you type, in this buffer |
 | `e` | edits the address of this page, and goes to what you make of it |
 | `t` | opens a page you kept, a URL, or a search, in a new tab, as the `+` of the tabs does |
-| `B`, `J` | keep this page as a bookmark, and open a page you kept |
-| `b` | lists the bookmarks, where `r` renames one, `d` and `x` delete, and `q` goes back |
-| `y` | copies the address of this page, as `f y` copies the address of a link |
+| `B`, `J` | keep this page as a bookmark, and open a page you kept; `SPC l` lists the bookmarks, where `r` renames one, `d` and `x` delete, and `q` goes back |
+| `y` | copies the address of this page, as `h y` copies the address of a link |
 | `C-<next>`, `C-<prior>` | go to the next and the previous tab, in insert state as well |
 | `C-c C-t` | choose a tab by its title or address, from a list with the icons |
 | `x` | closes this tab, and shows the one to its right |
 | `X` | opens again the tab closed last, in its place among the tabs |
 | `r` | reads the page again |
-| `M-p`, `M-n` | go back and forward in the history |
+| `b`, `f`, `M-p`, `M-n` | go back and forward in the history |
 | `j`, `k` | scroll a line further down and back |
 | `d`, `u` | scroll a screen further down and back |
 | `C-v`, `M-v`, the arrows | scroll a screen and a line |
 | `<prior>`, `<next>` | scroll a screen back and further down |
 | `g g`, `G`, `<home>`, `<end>`, `C-<home>`, `C-<end>`, `M-<`, `M->` | go to the top and the foot of the page |
-| `f` | labels what a click can reach, fields inside web components included, and clicks the one you name; the labels stay until you name one or press `ESC` |
+| `h` | labels what a click can reach, fields inside web components included, and clicks the one you name; the labels stay until you name one or press `ESC` |
 | `M-w` | labels the blocks of the page, and copies the picture of the one you name; `C-u M-w` copies the whole window |
 | `S` | labels the parts of the page that scroll on their own, and sends the scroll keys to the one you name |
 | `v` | moves a caret through the text of the page with the motions of Emacs |
@@ -415,9 +414,9 @@ the dispatch keys of avy do, and the prompt names it:
 `?` before the letters lists these keys in the prompt, as it does in
 avy.
 
-`f` labels what can be clicked, and `M-w` labels the blocks of the page:
+`h` labels what can be clicked, and `M-w` labels the blocks of the page:
 a header, a sidebar, an article, a dialog, a table, a piece of code, a
-picture. So `f y` and a hint copies the address of a link, and `M-w w`
+picture. So `h y` and a hint copies the address of a link, and `M-w w`
 and a hint copies the text of an article. None of these keys is a letter
 of the hints, and the code refuses one that is.
 
@@ -457,13 +456,13 @@ and the insert mode of Surfingkeys have them do:
 | `M-w`, `C-w` | copy the region, and cut it |
 | `C-g` | drop the mark, and then give the keys back to Emacs |
 
-A form is filled from the keyboard: `f` and the hint of the first field,
+A form is filled from the keyboard: `h` and the hint of the first field,
 the text, `TAB`, the next text, and `RET`. `TAB` goes from field to
 field only, as the `gi` of Vimium does, because a page puts buttons
 between its fields: Reddit puts the one that shows the password between
 the name and the password, and a tab of the browser's own stops there.
 The first and the last field follow one another. A button is reached
-with `f`.
+with `h`.
 
 The search paints every hit in the page itself, and scrolls to the one
 you are on.
@@ -506,7 +505,7 @@ The key that runs `avy-goto-char-timer` does what `M-j` does in a page,
 even when `bind-key*` binds it. You type until you pause for `avy-timeout-seconds`, or for 0.5
 seconds without avy. `RET` ends the text at once, `DEL` takes a
 character back, and `ESC` gives up. Every place in view that shows the
-text then takes a label, drawn and named as the labels of `f` are.
+text then takes a label, drawn and named as the labels of `h` are.
 Naming a label puts the caret there, and smear-cursor flies to it.
 
 A single place takes no label, as `avy-single-candidate-jump` has it.
@@ -701,6 +700,7 @@ Chrome for Testing here keeps it apart from the Chrome you browse with.
 | `canvas-browser-hint-keys` | asdfghjkl | the letters a hint is made of |
 | `canvas-browser-hint-font` | Sans Bold 11 | the font a hint is written in |
 | `canvas-browser-line-height` | 40 | pixels that `j` and `k` scroll |
+| `canvas-browser-wheel-step` | 60 | pixels that a turn of the wheel scrolls |
 | `canvas-browser-search-url` | DuckDuckGo | where words are searched for |
 | `canvas-browser-tabs` | t | whether a page buffer shows a line of tabs |
 | `canvas-browser-tab-width` | 20 | the most characters of a title a tab shows |

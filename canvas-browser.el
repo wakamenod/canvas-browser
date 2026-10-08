@@ -1597,7 +1597,7 @@ the line, and Delete follows once the page has told of the mark."
 
 (defun canvas-browser-copy-url ()
   "Copy the address of this page to the kill ring.
-The key is `y\=', which copies the address of a link after `f\=' as well.
+The key is `y\=', which copies the address of a link after `h\=' as well.
 `w\=', the key of eww, is a key of every canvas buffer."
   (interactive)
   (unless canvas-browser--url
@@ -1718,6 +1718,11 @@ at all."
   (interactive)
   (canvas-browser--scroll-by (- canvas-browser-line-height)))
 
+(defcustom canvas-browser-wheel-step 60
+  "Pixels that one turn of the wheel moves the page."
+  :type 'integer
+  :group 'canvas-browser)
+
 (defun canvas-browser--event-page-window (event)
   "The window EVENT, an event of the mouse, happened in, if it shows a page.
 Emacs looks the event up in the keys of that window, but runs the
@@ -1745,14 +1750,15 @@ any window of Emacs, so that what you type next reaches that page."
   "Scroll where EVENT, a turn of the wheel over the canvas, points.
 The turn goes to the page at that very pixel, so the part under the
 pointer scrolls, as it does in a window of chromium\='s own.  Emacs reports
-a fast turn as a double or a triple event, and each one scrolls a line.
+a fast turn as a double or a triple event, and each one scrolls
+`canvas-browser-wheel-step\' pixels.
 The page under the pointer scrolls, though another window is selected."
   (interactive "e")
   (let ((turn (event-basic-type event)))
     (cl-assert (memq turn '(wheel-up wheel-down wheel-left wheel-right)) nil
                "canvas-browser: %S is not a turn of the wheel" turn)
     (let ((at (posn-object-x-y (event-start event)))
-          (step canvas-browser-line-height))
+          (step canvas-browser-wheel-step))
       (with-current-buffer (canvas-browser--event-buffer event)
         (canvas-browser--wheel (car at) (cdr at)
                                (pcase turn ('wheel-up (- step)) ('wheel-down step) (_ 0))
@@ -3006,13 +3012,13 @@ and the settings.  The widths line the columns of the two rows up."
    ("x" "close" canvas-browser-close-tab)
    ("X" "reopen" canvas-browser-reopen-tab)
    ("r" "reload" canvas-browser-refresh)
-   ("M-p" "back" canvas-browser-back)
-   ("M-n" "forward" canvas-browser-forward)
+   ("b" "back" canvas-browser-back)
+   ("f" "forward" canvas-browser-forward)
    ("B" "bookmark" canvas-browser-bookmark)
    ("J" "bookmarks" canvas-browser-open-bookmark)
-   ("b" "edit bookmarks" canvas-browser-list-bookmarks)]
+   ("l" "edit bookmarks" canvas-browser-list-bookmarks)]
   ["Page"
-   ("f" "hints" canvas-browser-hints)
+   ("h" "hints" canvas-browser-hints)
    ("M-j" "jump" canvas-browser-caret-jump)
    ("TAB" "field" canvas-browser-next-field)
    ("s" "find" canvas-browser-find)
@@ -3041,6 +3047,8 @@ keys zoom the page.  `r\=' reads the page again; `g\=' is no
 ;; keeps its value when its file is loaded again, so keys bound there
 ;; would never reach a running Emacs.
 (define-keymap :keymap canvas-browser-mode-map
+  "b" #'canvas-browser-back
+  "f" #'canvas-browser-forward
   "M-p" #'canvas-browser-back
   "M-n" #'canvas-browser-forward
   "o" #'canvas-browser-open-url
@@ -3049,14 +3057,13 @@ keys zoom the page.  `r\=' reads the page again; `g\=' is no
   "y" #'canvas-browser-copy-url
   "B" #'canvas-browser-bookmark
   "J" #'canvas-browser-open-bookmark
-  "b" #'canvas-browser-list-bookmarks
   "v" #'canvas-browser-caret-mode
   "M-j" #'canvas-browser-caret-jump
   ;; The key of avy jumps in the page, wherever it is bound, and even
   ;; from a map that beats this one, as `bind-key*' puts it.
   "<remap> <avy-goto-char-timer>" #'canvas-browser-caret-jump
   "i" #'canvas-browser-insert-mode
-  "f" #'canvas-browser-hints
+  "h" #'canvas-browser-hints
   "S" #'canvas-browser-pick-scroller
   "TAB" #'canvas-browser-next-field
   "<backtab>" #'canvas-browser-previous-field

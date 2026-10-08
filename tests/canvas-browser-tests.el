@@ -166,8 +166,12 @@ that moment now."
     (should (eq (key-binding (kbd "r")) #'canvas-browser-refresh))
     (should (eq (plist-get (canvas-browser-test--menu-entry "r") :command) #'canvas-browser-refresh))
     (should-not (canvas-browser-test--menu-entry "g"))
+    (should (eq (key-binding (kbd "b")) #'canvas-browser-back))
+    (should (eq (key-binding (kbd "f")) #'canvas-browser-forward))
     (should (eq (key-binding (kbd "M-p")) #'canvas-browser-back))
     (should (eq (key-binding (kbd "M-n")) #'canvas-browser-forward))
+    (should (eq (key-binding (kbd "h")) #'canvas-browser-hints))
+    (should (eq (plist-get (canvas-browser-test--menu-entry "h") :command) #'canvas-browser-hints))
     (should (eq (key-binding (kbd "j")) #'canvas-browser-scroll-line-up))
     (should (eq (key-binding (kbd "k")) #'canvas-browser-scroll-line-down))
     (should (eq (key-binding (kbd "d")) #'canvas-browser-scroll-up))
@@ -884,7 +888,7 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
       (should (equal (plist-get event :type) "mouseWheel"))
       (should (equal (plist-get event :x) 120))
       (should (equal (plist-get event :y) 340))
-      (should (> (plist-get event :deltaY) 0)))
+      (should (= (plist-get event :deltaY) canvas-browser-wheel-step)))
     (canvas-browser-wheel (canvas-browser-test--wheel-event 'double-wheel-up 10 20))
     (let ((event (canvas-browser-test--params "Input.dispatchMouseEvent")))
       (should (equal (plist-get event :x) 10))
@@ -5246,15 +5250,17 @@ Return the dired buffer in which they are picked."
   ;; GIVEN a page buffer and its menu
   ;; WHEN B and J are looked up
   ;; THEN B keeps the page as a bookmark and J opens one, in the buffer
-  ;;      and in the menu alike
+  ;;      and in the menu alike, AND the list of them is in the menu only,
+  ;;      since b goes back
   (canvas-browser-test--in-page
     (should (eq 'canvas-browser-bookmark (key-binding (kbd "B"))))
-    (should (eq 'canvas-browser-open-bookmark (key-binding (kbd "J"))))
-    (should (eq 'canvas-browser-list-bookmarks (key-binding (kbd "b")))))
+    (should (eq 'canvas-browser-open-bookmark (key-binding (kbd "J")))))
   (should (eq 'canvas-browser-list-bookmarks
-              (plist-get (canvas-browser-test--menu-entry "b") :command)))
+              (plist-get (canvas-browser-test--menu-entry "l") :command)))
   (should (eq 'canvas-browser-back
-              (plist-get (canvas-browser-test--menu-entry "M-p") :command)))
+              (plist-get (canvas-browser-test--menu-entry "b") :command)))
+  (should (eq 'canvas-browser-forward
+              (plist-get (canvas-browser-test--menu-entry "f") :command)))
   (should (eq 'canvas-browser-bookmark
               (plist-get (canvas-browser-test--menu-entry "B") :command)))
   (should (eq 'canvas-browser-open-bookmark
