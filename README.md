@@ -128,10 +128,12 @@ Mac with Homebrew, from nothing.
      :defer t)
 
    (use-package canvas-diagram
-     ;; The Makefile looks for emacs-module.h in /usr/local/include only,
-     ;; so name the include directory of Homebrew too.
+     ;; The Makefile looks for emacs-module.h next to the binary of
+     ;; Emacs, which in Emacs.app is three directories down from it, so
+     ;; it is named.  canvas-cairo.c includes the header by its name as
+     ;; well, so the directory goes to the compiler too.
      :vc (:url "https://github.com/Daskeladden/canvas-diagram"
-          :shell-command "make CFLAGS='-O2 -Wall -Wextra -std=gnu11 -fPIC -I/opt/homebrew/include'")
+          :shell-command "make EMACS_INCLUDE=/opt/homebrew/include CFLAGS='-O2 -Wall -Wextra -std=gnu11 -fPIC -I/opt/homebrew/include'")
      :defer t)
 
    (use-package canvas-browser
@@ -180,11 +182,12 @@ Mac with Homebrew, from nothing.
            (delete-file file)))))
    ```
 
-   On an Intel Mac, Homebrew is in `/usr/local`, where the Makefile of
-   canvas-diagram looks already, so `:make "all"` does in place of its
-   `:shell-command`. To use clones as in [Install](#install) instead,
-   take canvas-browser from the fork, build canvas-diagram with
-   `make CFLAGS="-O2 -Wall -Wextra -std=gnu11 -fPIC -I$(brew --prefix)/include"`,
+   On an Intel Mac, Homebrew is in `/usr/local`, which the compiler
+   searches already, so the `:shell-command` of canvas-diagram is
+   `make EMACS_INCLUDE=/usr/local/include`. To use clones as in
+   [Install](#install) instead, take canvas-browser from the fork, build
+   canvas-diagram with
+   `make EMACS_INCLUDE="$(brew --prefix)/include" CFLAGS="-O2 -Wall -Wextra -std=gnu11 -fPIC -I$(brew --prefix)/include"`,
    and put `:load-path` in place of each `:vc`.
 
 4. **A browser.** Google Chrome and Brave both work. Brave blocks ads
