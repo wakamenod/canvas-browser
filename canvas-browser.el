@@ -2731,9 +2731,10 @@ this: it scrolls whatever the pointer is over."
 `eachText\\=' visits every text of the page in the order it reads, the
 text in the open shadow root of a web component included, where a
 walker over the page never goes: a shadow root is walked where its host
-stands, so that a hit inside one comes between the hits around it.  A text in lower case `folds\\=': it matches
-either case, as in isearch, and one with a capital matches that case.
-`haystackOf\\=' is the text of a node as such a search looks through it.")
+stands, so that a hit inside one comes between the hits around it.  A
+text in lower case `folds\\=': it matches either case, as in isearch,
+and one with a capital matches that case.  `haystackOf\\=' is the text
+of a node as such a search looks through it.")
 
 (defvar-local canvas-browser--last-search nil
   "The last string searched for in this page.")
