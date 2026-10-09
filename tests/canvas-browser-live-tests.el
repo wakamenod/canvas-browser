@@ -1113,3 +1113,46 @@ The hits, and the number of the one the search is at, as (COUNT . INDEX)."
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (canvas-browser-cdp-stop)
       (delete-directory canvas-browser-profile-directory t))))
+
+(ert-deftest canvas-browser-live-the-search-goes-through-a-web-component-in-order ()
+  ;; GIVEN the find shadow fixture: an apple in the page, one in the
+  ;;       shadow root of a web component below it, and one below that
+  ;; WHEN the page is searched for apple, and stepped through it, AND
+  ;;      the places of apple are asked for, as M-j asks
+  ;; THEN the apple in the web component comes between the other two, in
+  ;;      the search and in the places of M-j alike
+  (skip-unless (cl-some #'executable-find canvas-browser-chromium))
+  (let ((buffer nil)
+        (canvas-browser-profile-directory
+         (let ((temporary-file-directory (expand-file-name "~/snap/chromium/common/")))
+           (make-temp-file "canvas-browser-live-" t)))
+        (current "CSS.highlights.get('canvas-browser-find-current').values().next().value
+                    .startContainer.data"))
+    (unwind-protect
+        (let ((file (expand-file-name "tests/fixtures/find-shadow.html")))
+          (setq buffer (canvas-browser (concat "file://" file)))
+          (with-current-buffer buffer
+            (should (canvas-browser-live-test--wait 30 (lambda () canvas-browser--session)))
+            (should (canvas-browser-live-test--wait 30 (lambda () (> canvas-browser--frames 0))))
+            (canvas-browser-live-test--lay-out 800 600)
+            (canvas-browser--find-call
+             (apply #'format "begin(%S, %S, %S, %S)" (canvas-browser--find-colours)))
+            (should (equal (canvas-browser-live-test--find "apple" "forward") '(3 . 0)))
+            (should (equal (canvas-browser-live-test--page-says current)
+                           "first apple, in the page"))
+            (should (equal (canvas-browser-live-test--find "apple" "next") '(3 . 1)))
+            (should (equal (canvas-browser-live-test--page-says current)
+                           "apple in a shadow root"))
+            (should (equal (canvas-browser-live-test--find "apple" "next") '(3 . 2)))
+            (should (equal (canvas-browser-live-test--page-says current)
+                           "last apple, in the page again"))
+            (should (equal (canvas-browser-live-test--find "apple" "previous") '(3 . 1)))
+            (canvas-browser--find-call "stop(true)")
+            (let ((places (canvas-browser-live-test--page-says
+                           (canvas-browser--caret-script "find('apple')"))))
+              (should (equal (length places) 3))
+              (should (equal (mapcar (lambda (box) (plist-get box :y)) places)
+                             (sort (mapcar (lambda (box) (plist-get box :y)) places) #'<))))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (canvas-browser-cdp-stop)
+      (delete-directory canvas-browser-profile-directory t))))

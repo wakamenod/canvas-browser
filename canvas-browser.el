@@ -2712,10 +2712,15 @@ this: it scrolls whatever the pointer is over."
 ;;;; Find in page, and the text of a page
 
 (defconst canvas-browser--text-js
-  "const textRoots = () => {
-     const roots = [document];
-     walk(document, '*', e => { if (e.shadowRoot) roots.push(e.shadowRoot); });
-     return roots;
+  "const eachText = visit => {
+     const go = root => {
+       const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+       for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+         if (n.nodeType === 3) visit(n);
+         else if (n.shadowRoot) go(n.shadowRoot);
+       }
+     };
+     go(document);
    };
    const folds = text => text === text.toLowerCase();
    const haystackOf = (data, fold) => {
@@ -2723,9 +2728,10 @@ this: it scrolls whatever the pointer is over."
      return fold && lower.length === data.length ? lower : data;
    };"
   "The JavaScript the text of a page is searched with, by a find and a jump.
-It needs `canvas-browser--reach-js\\=' before it.  `textRoots\\=' are the
-page and the open shadow root of every web component, where a walker
-over the page never goes.  A text in lower case `folds\\=': it matches
+`eachText\\=' visits every text of the page in the order it reads, the
+text in the open shadow root of a web component included, where a
+walker over the page never goes: a shadow root is walked where its host
+stands, so that a hit inside one comes between the hits around it.  A text in lower case `folds\\=': it matches
 either case, as in isearch, and one with a capital matches that case.
 `haystackOf\\=' is the text of a node as such a search looks through it.")
 
@@ -2766,7 +2772,7 @@ character back, is dropped rather than shown.")
 
 (defconst canvas-browser--find-js
   (concat "(function () {
-     const version = 1;
+     const version = 2;
      if ((window.__canvasBrowserFind || {}).version === version) return;"
           canvas-browser--reach-js canvas-browser--text-js "
      const all = 'canvas-browser-find', one = 'canvas-browser-find-current';
@@ -2807,22 +2813,19 @@ character back, is dropped rather than shown.")
      };
      const hits = text => {
        const fold = folds(text), found = [], looks = new Map(), order = new Map();
-       for (const root of textRoots()) {
-         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-         for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-           order.set(node, order.size);
-           const haystack = haystackOf(node.data, fold);
-           let i = haystack.indexOf(text);
-           if (i < 0) continue;
-           const parent = parentOf(node);
-           if (!parent || skipped.test(parent.tagName)) continue;
-           let closed = shownAs(parent, looks);
-           if (!closed) continue;
-           if (parent.tagName === 'DETAILS' && !parent.open) closed = [...closed, parent];
-           for (; i >= 0; i = haystack.indexOf(text, i + text.length))
-             found.push({node, offset: i, length: text.length, closed});
-         }
-       }
+       eachText(node => {
+         order.set(node, order.size);
+         const haystack = haystackOf(node.data, fold);
+         let i = haystack.indexOf(text);
+         if (i < 0) return;
+         const parent = parentOf(node);
+         if (!parent || skipped.test(parent.tagName)) return;
+         let closed = shownAs(parent, looks);
+         if (!closed) return;
+         if (parent.tagName === 'DETAILS' && !parent.open) closed = [...closed, parent];
+         for (; i >= 0; i = haystack.indexOf(text, i + text.length))
+           found.push({node, offset: i, length: text.length, closed});
+       });
        return {found, order};
      };
      const rangeOf = hit => {
@@ -3171,9 +3174,12 @@ found nothing are taken back, and the search is at its last hit again."
          (good (and (buffer-live-p page)
                     (eql (buffer-local-value 'canvas-browser--find-count page) 0)
                     (buffer-local-value 'canvas-browser--find-good page))))
-    (if (and good (not (equal good (minibuffer-contents-no-properties))))
-        (progn (delete-minibuffer-contents)
-               (insert good))
+    (if (and good
+             (string-prefix-p good (minibuffer-contents-no-properties))
+             (not (equal good (minibuffer-contents-no-properties))))
+        ;; Only the tail goes: an empty minibuffer would send the search
+        ;; back to where it began.
+        (delete-region (+ (minibuffer-prompt-end) (length good)) (point-max))
       (abort-recursive-edit))))
 
 ;;;; Dark mode
@@ -3508,7 +3514,7 @@ keys zoom the page.  `r\=' reads the page again; `g\=' is no
 
 (defconst canvas-browser--caret-js
   (concat "(function () {
-     const version = 4;
+     const version = 5;
      if ((window.__canvasBrowserCaret || {}).version === version) return;"
           canvas-browser--reach-js canvas-browser--text-js "
      const barId = '__canvas-browser-caret';
@@ -3701,11 +3707,7 @@ keys zoom the page.  `r\=' reads the page again; `g\=' is no
          if (!text) throw new Error('canvas-browser: a jump needs text to look for');
          const fold = folds(text);
          places = [];
-         for (const root of textRoots()) {
-           const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-           for (let node = walker.nextNode(); node; node = walker.nextNode())
-             places.push(...matchesIn(node, text, fold));
-         }
+         eachText(node => places.push(...matchesIn(node, text, fold)));
          return places.map(place => place.box);
        },
        jump(i, extend) {

@@ -1183,18 +1183,25 @@ caught, as `C-g\\=' sends one.  The calls of the search that were sent."
     (should-not canvas-browser--last-search)))
 
 (ert-deftest canvas-browser-find-c-g-takes-back-what-found-nothing ()
-  ;; GIVEN a search whose last characters found nothing
+  ;; GIVEN a search stepped on to its third hit, whose last character
+  ;;       then found nothing
   ;; WHEN C-g is pressed
-  ;; THEN those characters are taken back, and the search goes on, as
-  ;;      `isearch-abort' does while a search fails
+  ;; THEN that character alone is taken back, and the search stays on the
+  ;;      hit it was at, as `isearch-abort' does while a search fails: it
+  ;;      does not go back to where it began
   (canvas-browser-test--in-page
     (let ((calls (canvas-browser-test--find-keys
-                  "C-s a p x y C-g RET"
+                  "C-s a p C-s C-s x C-g RET"
                   (lambda (text)
                     (if (string-search "x" text)
                         '(:count 0 :index 0 :wrapped :false)
                       '(:count 3 :index 0 :wrapped :false))))))
-      (should (equal (last calls 2) '("search(\"ap\", 'forward')" "stop(false)")))
+      (should (equal (cdr calls)
+                     '("search(\"a\", 'forward')" "search(\"ap\", 'forward')"
+                       "search(\"ap\", 'next')" "search(\"ap\", 'next')"
+                       "search(\"apx\", 'forward')" "search(\"ap\", 'forward')"
+                       "stop(false)")))
+      (should-not (member "back()" calls))
       (should (equal canvas-browser--last-search "ap")))))
 
 (ert-deftest canvas-browser-find-escape-stops-where-the-search-is ()
