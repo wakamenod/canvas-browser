@@ -179,11 +179,13 @@ that moment now."
     (should (eq (key-binding (kbd "n")) 'undefined))
     (should (eq (key-binding (kbd "p")) 'undefined))
     (should (eq (key-binding (kbd "C-s")) #'canvas-browser-find))
+    (should (eq (key-binding (kbd "C-r")) #'canvas-browser-find-backward))
+    (should (eq (plist-get (canvas-browser-test--menu-entry "s") :command) #'canvas-browser-find))
     (should (eq (key-binding (kbd "M-s M-l")) #'canvas-browser-search-text))
     ;; Every key of this map names a command that exists.
     (should (cl-every #'commandp
                       (list #'canvas-browser-search-text #'canvas-browser-text
-                            #'canvas-browser-find #'canvas-browser-find-previous
+                            #'canvas-browser-find #'canvas-browser-find-backward
                             #'canvas-browser-hints #'canvas-browser-toggle-dark
                             #'canvas-browser-back
                             #'canvas-browser-forward #'canvas-browser-open-url
@@ -1088,36 +1090,183 @@ Starting it gives HOW, as `canvas-browser-cdp-start' does, and counts in
 
 ;;;; Find in page
 
-(ert-deftest canvas-browser-find-paints-the-hit-and-steps-through-them ()
-  ;; GIVEN a page buffer
-  ;; WHEN a string is searched for, and then stepped forwards and back
-  ;; THEN the page is asked to find and paint that string, and the number
-  ;;      of the hit follows the steps, since window.find leaves nothing
-  ;;      to see in a headless chromium
-  (canvas-browser-test--in-page
-    (canvas-browser-find "parser")
-    (should (string-search "\"parser\"" (plist-get (canvas-browser-test--params "Runtime.evaluate")
-                                                   :expression)))
-    (should (equal canvas-browser--find-index 0))
-    (canvas-browser-find-next)
-    (should (equal canvas-browser--find-index 1))
-    (canvas-browser-find-previous)
-    (canvas-browser-find-previous)
-    (should (equal canvas-browser--find-index -1))))
+(defun canvas-browser-test--find-calls ()
+  "The calls of the search of the page that were sent, oldest first."
+  (cl-loop for (method . params) in (reverse canvas-browser-test--commands)
+           for expression = (plist-get params :expression)
+           when (and (equal method "Runtime.evaluate")
+                     (string-search "__canvasBrowserFind." expression))
+           collect (car (last (split-string expression "__canvasBrowserFind\\.")))))
 
-(ert-deftest canvas-browser-find-says-when-a-page-holds-nothing ()
-  ;; GIVEN a page that answers with no hits
-  ;; WHEN a string is searched for
-  ;; THEN the reader is told that the page holds it nowhere
+(defun canvas-browser-test--find-keys (keys &optional answer)
+  "Type KEYS in this page buffer, shown in the selected window.
+The page answers a search with what ANSWER, given its string, gives,
+and with three hits, the second, when there is no ANSWER.  A quit is
+caught, as `C-g\\=' sends one.  The calls of the search that were sent."
+  (let ((before (window-buffer (selected-window))))
+    (set-window-buffer (selected-window) (current-buffer))
+    (setq canvas-browser-test--commands nil)
+    (unwind-protect
+        (cl-letf (((symbol-function 'canvas-browser-cdp-send)
+                   (lambda (method params &optional reply _session)
+                     (push (cons method params) canvas-browser-test--commands)
+                     (let ((expression (plist-get params :expression)))
+                       (when reply
+                         (funcall reply
+                                  (list :result
+                                        (list :value
+                                              (if (string-match "search(\\(\"[^\"]*\"\\)" expression)
+                                                  (if answer
+                                                      (funcall answer (json-read-from-string
+                                                                       (match-string 1 expression)))
+                                                    '(:count 3 :index 1 :wrapped :false))
+                                                t)))))))))
+          (condition-case nil
+              (execute-kbd-macro (kbd keys))
+            (quit nil)))
+      (set-window-buffer (selected-window) before))
+    (canvas-browser-test--find-calls)))
+
+(ert-deftest canvas-browser-find-searches-as-it-is-typed ()
+  ;; GIVEN a page buffer
+  ;; WHEN C-s is pressed, a string typed, and RET pressed
+  ;; THEN the page is searched again at every character, forward from
+  ;;      where it is, AND RET takes the paint off and leaves the page
+  ;;      where the search took it, AND the string is the last search
   (canvas-browser-test--in-page
-    (let ((said nil))
+    (let ((calls (canvas-browser-test--find-keys "C-s a p RET")))
+      (should (string-prefix-p "begin(" (car calls)))
+      (should (equal (cdr calls)
+                     '("search(\"a\", 'forward')" "search(\"ap\", 'forward')" "stop(false)")))
+      (should (equal canvas-browser--last-search "ap"))
+      (should (equal canvas-browser--find-count 3))
+      (should (equal canvas-browser--find-index 1)))))
+
+(ert-deftest canvas-browser-find-steps-with-c-s-and-c-r-in-the-minibuffer ()
+  ;; GIVEN a search of the page, with a string typed
+  ;; WHEN C-s, C-s and C-r are pressed in the minibuffer
+  ;; THEN the search steps to the next hit twice and back once, as in
+  ;;      isearch, rather than reading a new string
+  (canvas-browser-test--in-page
+    (should (equal (cdr (canvas-browser-test--find-keys "C-s a C-s C-s C-r RET"))
+                   '("search(\"a\", 'forward')" "search(\"a\", 'next')" "search(\"a\", 'next')"
+                     "search(\"a\", 'previous')" "stop(false)")))))
+
+(ert-deftest canvas-browser-find-c-s-with-nothing-typed-searches-the-last-string ()
+  ;; GIVEN a page searched for "apple" before
+  ;; WHEN C-s is pressed twice, as C-s C-s is in isearch
+  ;; THEN the page is searched for "apple" again
+  (canvas-browser-test--in-page
+    (setq canvas-browser--last-search "apple")
+    (should (equal (cdr (canvas-browser-test--find-keys "C-s C-s RET"))
+                   '("search(\"apple\", 'forward')" "stop(false)")))))
+
+(ert-deftest canvas-browser-find-c-r-searches-backward ()
+  ;; GIVEN a page buffer in normal state
+  ;; WHEN C-r is pressed and a string typed
+  ;; THEN the page is searched backward, as `isearch-backward' searches,
+  ;;      AND the prompt says so
+  (canvas-browser-test--in-page
+    (should (eq (key-binding (kbd "C-r")) #'canvas-browser-find-backward))
+    (should (equal (cdr (canvas-browser-test--find-keys "C-r a RET"))
+                   '("search(\"a\", 'backward')" "stop(false)")))
+    (should (string-search "backward" (canvas-browser--find-prompt-text)))))
+
+(ert-deftest canvas-browser-find-c-g-goes-back-to-where-it-began ()
+  ;; GIVEN a search of the page that found hits
+  ;; WHEN C-g is pressed
+  ;; THEN the page goes back to where it stood before the search, and the
+  ;;      paint comes off, AND the string is not kept as the last search
+  (canvas-browser-test--in-page
+    (should (equal (cdr (canvas-browser-test--find-keys "C-s a C-g"))
+                   '("search(\"a\", 'forward')" "stop(true)")))
+    (should-not canvas-browser--last-search)))
+
+(ert-deftest canvas-browser-find-c-g-takes-back-what-found-nothing ()
+  ;; GIVEN a search whose last characters found nothing
+  ;; WHEN C-g is pressed
+  ;; THEN those characters are taken back, and the search goes on, as
+  ;;      `isearch-abort' does while a search fails
+  (canvas-browser-test--in-page
+    (let ((calls (canvas-browser-test--find-keys
+                  "C-s a p x y C-g RET"
+                  (lambda (text)
+                    (if (string-search "x" text)
+                        '(:count 0 :index 0 :wrapped :false)
+                      '(:count 3 :index 0 :wrapped :false))))))
+      (should (equal (last calls 2) '("search(\"ap\", 'forward')" "stop(false)")))
+      (should (equal canvas-browser--last-search "ap")))))
+
+(ert-deftest canvas-browser-find-escape-stops-where-the-search-is ()
+  ;; GIVEN a search of the page
+  ;; WHEN ESC is pressed
+  ;; THEN the paint comes off and the page stays where it is, as with RET
+  (canvas-browser-test--in-page
+    (should (equal (last (canvas-browser-test--find-keys "C-s a <escape>"))
+                   '("stop(false)")))))
+
+(ert-deftest canvas-browser-find-an-empty-string-goes-back-to-the-start ()
+  ;; GIVEN a search of the page with a character typed
+  ;; WHEN that character is taken back
+  ;; THEN the page goes back to where the search began, as isearch does
+  (canvas-browser-test--in-page
+    (should (member "back()" (canvas-browser-test--find-keys "C-s a DEL RET")))))
+
+(ert-deftest canvas-browser-find-drops-an-answer-that-came-too-late ()
+  ;; GIVEN two searches sent, one character apart
+  ;; WHEN the page answers the newer first, and then the older
+  ;; THEN the newer answer is the one shown
+  (canvas-browser-test--in-page
+    (let ((replies nil))
       (cl-letf (((symbol-function 'canvas-browser-cdp-send)
-                 (lambda (_method _params &optional answer _session)
-                   (when answer (funcall answer '(:result (:value (:count 0 :index 0)))))))
-                ((symbol-function 'message)
-                 (lambda (format &rest args) (setq said (apply #'format format args)))))
-        (canvas-browser-find "nothing here")
-        (should (string-search "no " said))))))
+                 (lambda (_method _params &optional reply _session) (push reply replies))))
+        (setq canvas-browser--find-text "a")
+        (canvas-browser--find "forward")
+        (setq canvas-browser--find-text "ap")
+        (canvas-browser--find "forward")
+        (funcall (car replies) '(:result (:value (:count 2 :index 0))))
+        (funcall (cadr replies) '(:result (:value (:count 9 :index 5))))
+        (should (equal canvas-browser--find-count 2))
+        (should (equal canvas-browser--find-index 0))))))
+
+(ert-deftest canvas-browser-find-the-prompt-says-how-the-search-goes ()
+  ;; GIVEN a search of the page
+  ;; WHEN the page answers that it found hits, came round, or found none
+  ;; THEN the prompt counts them as `isearch-lazy-count' does, and says
+  ;;      Wrapped and Failing as isearch does, AND the number of the hit
+  ;;      stays among the hits, whatever the page answers
+  (canvas-browser-test--in-page
+    (setq canvas-browser--find-text "apple")
+    (canvas-browser--found '(:count 7 :index 3 :wrapped :false))
+    (should (equal (canvas-browser--find-prompt-text) "4/7 Find in page: "))
+    (canvas-browser--found '(:count 7 :index -1 :wrapped t))
+    (should (equal canvas-browser--find-index 6))
+    (should (equal (canvas-browser--find-prompt-text) "7/7 Wrapped find in page: "))
+    (setq canvas-browser--find-wrapped nil)
+    (canvas-browser--found '(:count 0 :index 0 :wrapped :false))
+    (should (equal (canvas-browser--find-prompt-text) "0/0 Failing find in page: "))))
+
+(ert-deftest canvas-browser-find-paints-in-the-colours-of-isearch ()
+  ;; GIVEN faces of isearch with no colour, as in a terminal
+  ;; WHEN the colours of the hits are asked for
+  ;; THEN the hit the search is at is orange and the others yellow, each
+  ;;      with black text, and the two differ
+  (cl-letf (((symbol-function 'face-background) (lambda (&rest _) nil))
+            ((symbol-function 'face-foreground) (lambda (&rest _) nil)))
+    (let ((colours (canvas-browser--find-colours)))
+      (should (equal (length colours) 4))
+      (should (string-prefix-p "#ff9" (nth 0 colours)))
+      (should (equal (nth 1 colours) "#000000"))
+      (should (string-prefix-p "#ffd" (nth 2 colours)))
+      (should-not (equal (nth 0 colours) (nth 2 colours))))))
+
+(ert-deftest canvas-browser-find-and-jump-share-the-case-rule-of-isearch ()
+  ;; GIVEN the search of the page and the jump of the caret
+  ;; WHEN their scripts are made
+  ;; THEN both fold case by the same rule, a string in lower case alone
+  ;;      matching either case
+  (should (string-search "const folds" (canvas-browser--find-script "search('a', 'forward')")))
+  (should (string-search "const folds" (canvas-browser--caret-script "find('a')"))))
 
 ;;;; The map of canvas-minimap
 

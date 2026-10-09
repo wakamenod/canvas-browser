@@ -345,7 +345,7 @@ Normal state keeps the keys of Emacs:
 | `v` | moves a caret through the text of the page with the motions of Emacs |
 | `M-j` | puts the caret on text you type, as `avy-goto-char-timer` puts point |
 | `TAB`, `S-TAB` | go to the next and the previous field, and type there |
-| `C-s`, `C-r` | search the page, and step to the next hit and the one before |
+| `C-s`, `C-r` | search the page forward and backward as you type, as isearch does |
 | `i` | sends the keys to the page, as a click in a field does |
 | `T` | puts the text of the page in an ordinary buffer |
 | `M-s M-l` | searches that text with `consult-line` |
@@ -464,8 +464,18 @@ the name and the password, and a tab of the browser's own stops there.
 The first and the last field follow one another. A button is reached
 with `h`.
 
-The search paints every hit in the page itself, and scrolls to the one
-you are on.
+The search works as isearch does. It searches the page again at every
+character you type, starting from what is in view, and the prompt counts
+the hits as `4/7`, and says `Failing` and `Wrapped` as isearch does. In
+the minibuffer, `C-s` goes to the next hit and `C-r` to the one before,
+and `C-s` with nothing typed searches for the last string again. A
+string in lower case matches either case, and one with a capital matches
+that case. The page paints every hit itself: the hit you are on in the
+colour of the `isearch` face, and the others in that of `lazy-highlight`.
+A hit out of view is scrolled into it, in a part of the page that
+scrolls on its own as well, and a hit in a closed `<details>` opens it,
+as the search of chromium does. `RET` or `ESC` stops where you are, and
+`C-g` goes back to where the search began. Both take the paint off.
 
 The buffer that `T` fills is an ordinary buffer, so isearch,
 `consult-line` and the kill ring work on the text of the page. `T` goes

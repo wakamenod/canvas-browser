@@ -1056,3 +1056,60 @@ is cleared away."
         (should (equal (canvas-browser-live-test--page-says
                         "document.getElementById('one').files.length")
                        0))))))
+
+(defun canvas-browser-live-test--find (text how)
+  "Search this page for TEXT, going HOW, and wait for the answer.
+The hits, and the number of the one the search is at, as (COUNT . INDEX)."
+  (setq canvas-browser--find-text text
+        canvas-browser--find-count nil)
+  (canvas-browser--find how)
+  (should (canvas-browser-live-test--wait 10 (lambda () canvas-browser--find-count)))
+  (cons canvas-browser--find-count canvas-browser--find-index))
+
+(ert-deftest canvas-browser-live-the-search-finds-and-goes-back ()
+  ;; GIVEN the find fixture: apples in the text, in a part that scrolls
+  ;;       on its own, in a closed details and in a hidden paragraph
+  ;; WHEN the page is searched in lower case, with a capital, and in
+  ;;      Japanese, stepped to the apple in the part and the one in the
+  ;;      details, and the search is given up
+  ;; THEN lower case matches either case and a capital only its own, the
+  ;;      hidden apple is no hit, AND the part scrolls to its apple, AND
+  ;;      the details opens, AND giving up puts all of it back as it was
+  (skip-unless (cl-some #'executable-find canvas-browser-chromium))
+  (let ((buffer nil)
+        (canvas-browser-profile-directory
+         (let ((temporary-file-directory (expand-file-name "~/snap/chromium/common/")))
+           (make-temp-file "canvas-browser-live-" t))))
+    (unwind-protect
+        (let ((file (expand-file-name "tests/fixtures/find.html")))
+          (setq buffer (canvas-browser (concat "file://" file)))
+          (with-current-buffer buffer
+            (should (canvas-browser-live-test--wait 30 (lambda () canvas-browser--session)))
+            (should (canvas-browser-live-test--wait 30 (lambda () (> canvas-browser--frames 0))))
+            (canvas-browser-live-test--lay-out 800 600)
+            (canvas-browser--find-call
+             (apply #'format "begin(%S, %S, %S, %S)" (canvas-browser--find-colours)))
+            (should (equal (canvas-browser-live-test--find "りんご" "forward") '(2 . 0)))
+            (should (equal (canvas-browser-live-test--find "Apple" "forward") '(1 . 0)))
+            ;; The search stays on the hit it is at while that still matches.
+            (should (equal (canvas-browser-live-test--find "apple" "forward") '(7 . 2)))
+            (canvas-browser-live-test--find "apple" "next")
+            (should (equal (canvas-browser-live-test--find "apple" "next") '(7 . 4)))
+            (should (> (canvas-browser-live-test--page-says
+                        "document.getElementById('box').scrollTop")
+                       0))
+            (should (equal (canvas-browser-live-test--find "apple" "next") '(7 . 5)))
+            (should (eq (canvas-browser-live-test--page-says
+                         "document.querySelector('details').open")
+                        t))
+            (should (equal (canvas-browser-live-test--page-says "CSS.highlights.size") 2))
+            (canvas-browser--find-call "stop(true)")
+            (should (canvas-browser-live-test--wait
+                     10 (lambda ()
+                          (equal (canvas-browser-live-test--page-says
+                                  "[scrollY, document.getElementById('box').scrollTop,
+                                    document.querySelector('details').open, CSS.highlights.size]")
+                                 '(0 0 :false 0)))))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (canvas-browser-cdp-stop)
+      (delete-directory canvas-browser-profile-directory t))))

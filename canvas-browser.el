@@ -2711,80 +2711,470 @@ this: it scrolls whatever the pointer is over."
 
 ;;;; Find in page, and the text of a page
 
+(defconst canvas-browser--text-js
+  "const textRoots = () => {
+     const roots = [document];
+     walk(document, '*', e => { if (e.shadowRoot) roots.push(e.shadowRoot); });
+     return roots;
+   };
+   const folds = text => text === text.toLowerCase();
+   const haystackOf = (data, fold) => {
+     const lower = data.toLowerCase();
+     return fold && lower.length === data.length ? lower : data;
+   };"
+  "The JavaScript the text of a page is searched with, by a find and a jump.
+It needs `canvas-browser--reach-js\\=' before it.  `textRoots\\=' are the
+page and the open shadow root of every web component, where a walker
+over the page never goes.  A text in lower case `folds\\=': it matches
+either case, as in isearch, and one with a capital matches that case.
+`haystackOf\\=' is the text of a node as such a search looks through it.")
+
 (defvar-local canvas-browser--last-search nil
   "The last string searched for in this page.")
 
+(defvar-local canvas-browser--find-text ""
+  "The string the search of this page is at, as typed so far.")
+
 (defvar-local canvas-browser--find-index 0
-  "Which hit of the last search the page shows.")
+  "Which hit of the search the page shows, counted from 0.")
 
-(defconst canvas-browser--find-script "
-(function (text, index) {
-  const style = 'canvas-browser-find-style';
-  if (!document.getElementById(style)) {
-    const sheet = document.createElement('style');
-    sheet.id = style;
-    sheet.textContent = '::highlight(canvas-browser-find) { background: #ffd54f; color: #000; }';
-    document.documentElement.appendChild(sheet);
-  }
-  if (!text) { CSS.highlights.delete('canvas-browser-find'); return {count: 0, index: 0}; }
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  const ranges = [];
-  const wanted = text.toLowerCase();
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const line = node.textContent.toLowerCase();
-    for (let at = line.indexOf(wanted); at !== -1; at = line.indexOf(wanted, at + wanted.length)) {
-      const range = document.createRange();
-      range.setStart(node, at);
-      range.setEnd(node, at + text.length);
-      if (range.getBoundingClientRect().width > 0) ranges.push(range);
-    }
-  }
-  if (ranges.length === 0) { CSS.highlights.delete('canvas-browser-find'); return {count: 0, index: 0}; }
-  const at = ((index %% ranges.length) + ranges.length) %% ranges.length;
-  CSS.highlights.set('canvas-browser-find', new Highlight(...ranges));
-  const rect = ranges[at].getBoundingClientRect();
-  window.scrollBy(0, rect.top - innerHeight / 2);
-  return {count: ranges.length, index: at};
-})(%s, %d)"
-  "The JavaScript that finds a string, paints every hit and scrolls to one.
-`window.find\=' answers in a headless chromium but leaves nothing to see,
-so the page paints the hits itself, with the highlight API of CSS.")
+(defvar-local canvas-browser--find-count nil
+  "How many hits the search has, or nil before the page answers.")
 
-(defun canvas-browser--find (string index)
-  "Search the page for STRING and show the hit at INDEX."
-  (unless (and string (not (string-empty-p string)))
-    (user-error "canvas-browser: nothing has been searched for yet"))
-  (setq canvas-browser--last-search string
-        canvas-browser--find-index index)
-  (canvas-browser-cdp-send
-   "Runtime.evaluate"
-   (list :expression (format canvas-browser--find-script (json-encode string) index)
-         :returnByValue t)
-   #'canvas-browser--found
-   canvas-browser--session))
+(defvar-local canvas-browser--find-backward nil
+  "Whether the search of this page goes backward.")
 
-(defun canvas-browser--found (result)
-  "Say what RESULT, the answer of the search, found."
-  (let* ((value (plist-get (plist-get result :result) :value))
-         (count (or (plist-get value :count) 0)))
-    (if (zerop count)
-        (message "canvas-browser: no hit for %s" canvas-browser--last-search)
-      (message "canvas-browser: hit %d of %d" (1+ (plist-get value :index)) count))))
+(defvar-local canvas-browser--find-wrapped nil
+  "Whether the search went past an end of the page, and came round.")
 
-(defun canvas-browser-find (string)
-  "Search the page for STRING, and paint every hit."
-  (interactive (list (read-string "Find in page: " nil nil canvas-browser--last-search)))
-  (canvas-browser--find string 0))
+(defvar-local canvas-browser--find-good ""
+  "The longest string typed so far that the page has hits for.")
+
+(defvar-local canvas-browser--find-serial 0
+  "The number of the last search sent to the page.
+The page answers a moment later, and an answer to an older search, one
+character back, is dropped rather than shown.")
+
+(defvar-local canvas-browser--find-prompt nil
+  "The overlay over the prompt of the search, which shows how it goes.")
+
+(defvar canvas-browser--find-page nil
+  "The page buffer the minibuffer searches, while it does.")
+
+(defvar canvas-browser-find-history nil
+  "The strings searched for in a page.")
+
+(defconst canvas-browser--find-js
+  (concat "(function () {
+     const version = 1;
+     if ((window.__canvasBrowserFind || {}).version === version) return;"
+          canvas-browser--reach-js canvas-browser--text-js "
+     const all = 'canvas-browser-find', one = 'canvas-browser-find-current';
+     let state = null;
+     const fresh = () => ({x: scrollX, y: scrollY, scrolled: new Map(), opened: [], at: null});
+     const paint = (bg, fg, otherBg, otherFg) => {
+       let sheet = document.getElementById(all);
+       if (!sheet) {
+         sheet = document.createElement('style');
+         sheet.id = all;
+         document.documentElement.appendChild(sheet);
+       }
+       sheet.textContent = '::highlight(' + one + ') { background: ' + bg + '; color: ' + fg + '; }' +
+                           '::highlight(' + all + ') { background: ' + otherBg + '; color: ' + otherFg + '; }';
+     };
+     const unpaint = () => { CSS.highlights.delete(all); CSS.highlights.delete(one); };
+     const skipped = /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|TITLE)$/;
+     const parentOf = node => node.parentElement || (node.parentNode && node.parentNode.host);
+     const closedAbove = (n, looks) => {
+       if (!n) return [];
+       if (n.nodeType !== 1) return closedAbove(up(n), looks);
+       if (looks.has(n)) return looks.get(n);
+       let closed = null;
+       if (getComputedStyle(n).display !== 'none') {
+         const p = up(n);
+         closed = closedAbove(p, looks);
+         if (closed && p && p.tagName === 'DETAILS' && !p.open && n.tagName !== 'SUMMARY')
+           closed = [...closed, p];
+         if (closed && n.getAttribute('hidden') === 'until-found') closed = [...closed, n];
+       }
+       looks.set(n, closed);
+       return closed;
+     };
+     const shownAs = (e, looks) => {
+       const closed = closedAbove(e, looks);
+       if (!closed || (!closed.length && !e.checkVisibility({visibilityProperty: true}))) return null;
+       return closed;
+     };
+     const hits = text => {
+       const fold = folds(text), found = [], looks = new Map(), order = new Map();
+       for (const root of textRoots()) {
+         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+         for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+           order.set(node, order.size);
+           const haystack = haystackOf(node.data, fold);
+           let i = haystack.indexOf(text);
+           if (i < 0) continue;
+           const parent = parentOf(node);
+           if (!parent || skipped.test(parent.tagName)) continue;
+           let closed = shownAs(parent, looks);
+           if (!closed) continue;
+           if (parent.tagName === 'DETAILS' && !parent.open) closed = [...closed, parent];
+           for (; i >= 0; i = haystack.indexOf(text, i + text.length))
+             found.push({node, offset: i, length: text.length, closed});
+         }
+       }
+       return {found, order};
+     };
+     const rangeOf = hit => {
+       const r = document.createRange();
+       r.setStart(hit.node, hit.offset);
+       r.setEnd(hit.node, hit.offset + hit.length);
+       return r;
+     };
+     const boxOf = hit => hit.closed.length
+       ? hit.closed[0].getBoundingClientRect()
+       : rangeOf(hit).getBoundingClientRect();
+     const choose = (found, order, how) => {
+       const ahead = how === 'forward' || how === 'next';
+       const strict = how === 'next' || how === 'previous';
+       const at = state.at && order.has(state.at.node) ? state.at : null;
+       const from = h => (order.get(h.node) - order.get(at.node)) || (h.offset - at.offset);
+       let pick;
+       if (at && ahead) pick = found.findIndex(h => strict ? from(h) > 0 : from(h) >= 0);
+       else if (at) pick = found.findLastIndex(h => strict ? from(h) < 0 : from(h) <= 0);
+       else if (ahead) pick = found.findIndex(h => boxOf(h).bottom > 0);
+       else pick = found.findLastIndex(h => boxOf(h).top < innerHeight);
+       return pick >= 0 ? {index: pick, wrapped: false}
+                        : {index: ahead ? 0 : found.length - 1, wrapped: true};
+     };
+     const scrolls = n => n.nodeType === 1 && n !== document.scrollingElement &&
+                          n !== document.body &&
+                          (n.scrollHeight > n.clientHeight || n.scrollWidth > n.clientWidth);
+     const keep = e => {
+       for (let n = e; n; n = up(n))
+         if (scrolls(n) && !state.scrolled.has(n)) state.scrolled.set(n, [n.scrollLeft, n.scrollTop]);
+     };
+     const holds = (b, r) => r.top >= b.top - 1 && r.bottom <= b.bottom + 1 &&
+                             r.left >= b.left - 1 && r.right <= b.right + 1;
+     const inView = (r, e) => {
+       if (r.width === 0 && r.height === 0) return false;
+       if (!holds({top: 0, left: 0, bottom: innerHeight, right: innerWidth}, r)) return false;
+       for (let n = e; n; n = up(n)) {
+         if (n.nodeType !== 1 || n === document.scrollingElement || n === document.body) continue;
+         const s = getComputedStyle(n);
+         if ((s.overflowX !== 'visible' || s.overflowY !== 'visible') &&
+             !holds(n.getBoundingClientRect(), r)) return false;
+       }
+       return true;
+     };
+     const bring = (hit, range) => {
+       const parent = parentOf(hit.node);
+       if (inView(range.getBoundingClientRect(), parent)) return;
+       keep(parent);
+       parent.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'});
+       for (let n = parent; n; n = up(n)) {
+         if (!scrolls(n)) continue;
+         const r = range.getBoundingClientRect(), b = n.getBoundingClientRect();
+         if (r.top < b.top || r.bottom > b.bottom)
+           n.scrollBy({top: (r.top + r.bottom - b.top - b.bottom) / 2, behavior: 'instant'});
+       }
+       const r = range.getBoundingClientRect();
+       if (r.top < 0 || r.bottom > innerHeight)
+         window.scrollBy({top: (r.top + r.bottom - innerHeight) / 2, behavior: 'instant'});
+     };
+     const open = hit => {
+       for (const e of hit.closed) {
+         if (e.tagName === 'DETAILS') {
+           e.open = true;
+           state.opened.push(() => { e.open = false; });
+         } else {
+           e.dispatchEvent(new Event('beforematch', {bubbles: true}));
+           e.removeAttribute('hidden');
+           state.opened.push(() => e.setAttribute('hidden', 'until-found'));
+         }
+       }
+     };
+     const show = (found, index) => {
+       const hit = found[index];
+       open(hit);
+       const others = new Highlight(), current = new Highlight();
+       found.forEach((h, i) => (i === index ? current : others).add(rangeOf(h)));
+       current.priority = 1;
+       CSS.highlights.set(all, others);
+       CSS.highlights.set(one, current);
+       bring(hit, rangeOf(hit));
+       state.at = {node: hit.node, offset: hit.offset};
+     };
+     const restore = () => {
+       state.opened.reverse().forEach(close => close());
+       state.scrolled.forEach(([left, top], e) => e.scrollTo({left, top, behavior: 'instant'}));
+       window.scrollTo({left: state.x, top: state.y, behavior: 'instant'});
+       state.opened = [];
+       state.scrolled.clear();
+       state.at = null;
+     };
+     window.__canvasBrowserFind = {
+       version,
+       begin(bg, fg, otherBg, otherFg) {
+         paint(bg, fg, otherBg, otherFg);
+         unpaint();
+         state = fresh();
+         return true;
+       },
+       search(text, how) {
+         if (!state) state = fresh();
+         const {found, order} = hits(text);
+         if (!found.length) return {count: 0, index: 0, wrapped: false};
+         const {index, wrapped} = choose(found, order, how);
+         show(found, index);
+         return {count: found.length, index, wrapped};
+       },
+       back() {
+         unpaint();
+         if (state) restore();
+         return true;
+       },
+       stop(back) {
+         unpaint();
+         if (state && back) restore();
+         state = null;
+         return true;
+       }
+     };
+   })();")
+  "The JavaScript of the search of a page, `window.__canvasBrowserFind\\='.
+`window.find\\=' answers in a headless chromium but leaves nothing to see,
+so the page paints the hits itself, with the highlight API of CSS: the
+hit the search is at in the colour of `isearch\\=', the others in that of
+`lazy-highlight\\='.  `begin\\=' notes where the page stands, and `search\\='
+finds a string and goes to a hit, as `how\\=' says: `forward\\=' and
+`backward\\=' stay on the hit they are at while it still matches, as
+isearch does while you type, and `next\\=' and `previous\\=' step off it.
+A string that finds nothing leaves the paint of the last that did, as a
+failing isearch leaves its last match.
+Before a hit is chosen, the search starts from what is in view.  Past an
+end it comes round, and says so.  A hit out of view is brought into it,
+along with the parts that scroll on their own around it, and one in a
+closed details, or under hidden=until-found, opens it, as the search of
+chromium does; text that is not drawn at all is no hit.  `back\\=' goes
+back to where the search began, and closes again what it opened, and
+`stop\\=' takes the paint off, and goes back too when told to.  It is put
+in every time it is used, as the caret is.")
+
+(defun canvas-browser--find-script (call)
+  "The script that runs CALL, a method of the search of the page."
+  (concat canvas-browser--find-js "window.__canvasBrowserFind." call))
+
+(defun canvas-browser--face-colours (face fill)
+  "The colours of FACE, as (BACKGROUND FOREGROUND) in CSS.
+FILL, as (RED GREEN BLUE) between 0 and 1, stands for a background the
+face lacks, and a face with no foreground of its own gets black or white,
+whichever reads on its background."
+  (let* ((rgb (or (and-let* ((name (face-background face nil t))) (color-name-to-rgb name))
+                  fill))
+         (text (and-let* ((name (face-foreground face nil t))) (color-name-to-rgb name)))
+         (light (> (+ (* 0.299 (nth 0 rgb)) (* 0.587 (nth 1 rgb)) (* 0.114 (nth 2 rgb))) 0.5)))
+    (list (apply #'color-rgb-to-hex (append rgb '(2)))
+          (if text
+              (apply #'color-rgb-to-hex (append text '(2)))
+            (if light "#000000" "#ffffff")))))
+
+(defun canvas-browser--find-colours ()
+  "The colours of the hits, as isearch paints its own.
+The hit the search is at takes `isearch\\=', and the others take
+`lazy-highlight\\=', or orange and yellow when they have no colour."
+  (append (canvas-browser--face-colours 'isearch '(1.0 0.59 0.2))
+          (canvas-browser--face-colours 'lazy-highlight '(1.0 0.84 0.31))))
+
+(defun canvas-browser--find-call (call &optional answer)
+  "Run CALL, a method of the search of the page, and give ANSWER its value."
+  (canvas-browser--evaluate-here (canvas-browser--find-script call)
+                                 (or answer #'ignore)))
+
+(defun canvas-browser--find (how)
+  "Search the page for the string typed so far, going HOW.
+HOW is forward, backward, next or previous, as the search of the page
+takes them.  Each string is sent as it is typed, and an answer that a
+newer string has overtaken is dropped."
+  (let ((serial (cl-incf canvas-browser--find-serial))
+        (text canvas-browser--find-text))
+    (canvas-browser--find-call
+     (format "search(%s, '%s')" (json-encode text) how)
+     (lambda (answer)
+       (canvas-browser--found-some text answer)
+       (when (= serial canvas-browser--find-serial)
+         (canvas-browser--found answer))))))
+
+(defun canvas-browser--found-some (text answer)
+  "Keep TEXT as the string to go back to, if ANSWER found it.
+An answer that came too late to be shown still tells it."
+  (when (and (> (or (plist-get answer :count) 0) 0)
+             (string-prefix-p text canvas-browser--find-text)
+             (> (length text) (length canvas-browser--find-good)))
+    (setq canvas-browser--find-good text)))
+
+(defun canvas-browser--found (answer)
+  "Take ANSWER, the hit the page went to and how many there are."
+  (when answer
+    (setq canvas-browser--find-count (or (plist-get answer :count) 0)
+          canvas-browser--find-index (if (zerop canvas-browser--find-count)
+                                         0
+                                       (mod (or (plist-get answer :index) 0)
+                                            canvas-browser--find-count)))
+    (when (eq (plist-get answer :wrapped) t)
+      (setq canvas-browser--find-wrapped t))
+    (canvas-browser--find-show-prompt)))
+
+(defun canvas-browser--find-prompt-text ()
+  "The prompt of the search, worded as isearch words its own.
+The number of the hit and the count stand first, as `isearch-lazy-count\\='
+puts them, and then whether it fails, whether it came round, and which
+way it goes."
+  (let* ((typed (not (string-empty-p canvas-browser--find-text)))
+         (failing (and typed (eql canvas-browser--find-count 0)))
+         (prompt (string-join (delq nil (list (and failing "failing")
+                                              (and canvas-browser--find-wrapped "wrapped")
+                                              "find in page"
+                                              (and canvas-browser--find-backward "backward")))
+                              " ")))
+    (propertize
+     (concat (cond ((not (and typed canvas-browser--find-count)) "")
+                   (failing "0/0 ")
+                   (t (format "%d/%d " (1+ canvas-browser--find-index)
+                              canvas-browser--find-count)))
+             (upcase (substring prompt 0 1)) (substring prompt 1) ": ")
+     'face 'minibuffer-prompt)))
+
+(defun canvas-browser--find-show-prompt ()
+  "Show in the prompt of the search how it goes."
+  (when (and canvas-browser--find-prompt (overlay-buffer canvas-browser--find-prompt))
+    (overlay-put canvas-browser--find-prompt 'display (canvas-browser--find-prompt-text))))
+
+(defun canvas-browser--find-typed (page text)
+  "Search PAGE for TEXT, which the minibuffer now holds.
+An empty minibuffer goes back to where the search began, as isearch goes
+back when every character is taken back."
+  (when (buffer-live-p page)
+    (with-current-buffer page
+      (unless (equal text canvas-browser--find-text)
+        (setq canvas-browser--find-text text)
+        (unless (string-prefix-p canvas-browser--find-good text)
+          (setq canvas-browser--find-good ""))
+        (if (string-empty-p text)
+            (progn (cl-incf canvas-browser--find-serial)
+                   (setq canvas-browser--find-count nil
+                         canvas-browser--find-wrapped nil)
+                   (canvas-browser--find-call "back()")
+                   (canvas-browser--find-show-prompt))
+          (canvas-browser--find (if canvas-browser--find-backward "backward" "forward")))))))
+
+(defun canvas-browser--find-setup (page)
+  "Ready the minibuffer to search PAGE as it is typed in."
+  (let ((overlay (make-overlay (point-min) (minibuffer-prompt-end))))
+    (with-current-buffer page
+      (setq canvas-browser--find-prompt overlay)))
+  (add-hook 'after-change-functions
+            (lambda (&rest _) (canvas-browser--find-typed page (minibuffer-contents-no-properties)))
+            nil t))
+
+(defvar canvas-browser-find-map
+  (define-keymap :parent minibuffer-local-map)
+  "Keymap of the minibuffer while it searches a page.
+`C-s\\=' and `C-r\\=' go to the next hit and the one before, as in isearch,
+`RET\\=' and `ESC\\=' stop where the search is, and `C-g\\=' takes back what
+found nothing, or else goes back to where the search began.")
+
+;; The keys are bound here and not where the map is made, for the reason
+;; `canvas-browser-mode-map' gives.
+(define-keymap :keymap canvas-browser-find-map
+  "C-s" #'canvas-browser-find-next
+  "C-r" #'canvas-browser-find-previous
+  "C-g" #'canvas-browser-find-abort
+  "<escape>" #'exit-minibuffer)
+
+(defun canvas-browser--find-read (backward)
+  "Search this page as you type, as isearch searches a buffer.
+BACKWARD starts the search backward."
+  (let ((page (current-buffer))
+        (stopped nil))
+    (setq canvas-browser--find-text ""
+          canvas-browser--find-good ""
+          canvas-browser--find-index 0
+          canvas-browser--find-count nil
+          canvas-browser--find-backward backward
+          canvas-browser--find-wrapped nil)
+    (canvas-browser--find-call (apply #'format "begin(%S, %S, %S, %S)" (canvas-browser--find-colours)))
+    (unwind-protect
+        (let ((text (let ((canvas-browser--find-page page))
+                      (minibuffer-with-setup-hook (lambda () (canvas-browser--find-setup page))
+                        (read-from-minibuffer (canvas-browser--find-prompt-text) nil
+                                              canvas-browser-find-map nil
+                                              'canvas-browser-find-history)))))
+          (unless (string-empty-p text)
+            (setq canvas-browser--last-search text))
+          (setq stopped t))
+      (when (buffer-live-p page)
+        (with-current-buffer page
+          (cl-incf canvas-browser--find-serial)
+          (setq canvas-browser--find-prompt nil)
+          (canvas-browser--find-call (if stopped "stop(false)" "stop(true)")))))))
+
+(defun canvas-browser--find-step (backward)
+  "Go to the next hit, or the one before when BACKWARD.
+With nothing typed yet, search for the last string again, as `C-s C-s\\='
+does in isearch.  Outside a search, start one."
+  (if-let* ((page canvas-browser--find-page)
+            ((minibufferp))
+            ((buffer-live-p page)))
+      (if (string-empty-p (minibuffer-contents-no-properties))
+          (when-let* ((last (buffer-local-value 'canvas-browser--last-search page)))
+            (with-current-buffer page
+              (setq canvas-browser--find-backward backward))
+            (insert last))
+        (with-current-buffer page
+          (setq canvas-browser--find-backward backward)
+          (canvas-browser--find (if backward "previous" "next"))))
+    (canvas-browser--find-read backward)))
+
+(defun canvas-browser-find ()
+  "Search the page as you type, as isearch does.
+Every hit is painted, and the one the search is at stands out.  In the
+minibuffer, `C-s\\=' goes to the next hit and `C-r\\=' to the one before,
+and `C-s\\=' with nothing typed searches for the last string again.
+`RET\\=' stops where the search is, and `C-g\\=' goes back to where it
+began.  A string in lower case matches either case, as in isearch."
+  (interactive)
+  (canvas-browser--find-read nil))
+
+(defun canvas-browser-find-backward ()
+  "Search the page backward as you type, as `isearch-backward\\=' does.
+It works as `canvas-browser-find\\=' does, the other way."
+  (interactive)
+  (canvas-browser--find-read t))
 
 (defun canvas-browser-find-next ()
-  "Show the next hit of the last search."
+  "Go to the next hit of the search, or search for the last string again."
   (interactive)
-  (canvas-browser--find canvas-browser--last-search (1+ canvas-browser--find-index)))
+  (canvas-browser--find-step nil))
 
 (defun canvas-browser-find-previous ()
-  "Show the hit before this one."
+  "Go to the hit before this one, or search backward for the last string."
   (interactive)
-  (canvas-browser--find canvas-browser--last-search (1- canvas-browser--find-index)))
+  (canvas-browser--find-step t))
+
+(defun canvas-browser-find-abort ()
+  "Take back what found nothing, or else go back to where the search began.
+As `isearch-abort\\=' does: while the search fails, the characters that
+found nothing are taken back, and the search is at its last hit again."
+  (interactive)
+  (let* ((page canvas-browser--find-page)
+         (good (and (buffer-live-p page)
+                    (eql (buffer-local-value 'canvas-browser--find-count page) 0)
+                    (buffer-local-value 'canvas-browser--find-good page))))
+    (if (and good (not (equal good (minibuffer-contents-no-properties))))
+        (progn (delete-minibuffer-contents)
+               (insert good))
+      (abort-recursive-edit))))
 
 ;;;; Dark mode
 
@@ -3068,7 +3458,7 @@ keys zoom the page.  `r\=' reads the page again; `g\=' is no
   "TAB" #'canvas-browser-next-field
   "<backtab>" #'canvas-browser-previous-field
   "C-s" #'canvas-browser-find
-  "C-r" #'canvas-browser-find-previous
+  "C-r" #'canvas-browser-find-backward
   "j" #'canvas-browser-scroll-line-up
   "k" #'canvas-browser-scroll-line-down
   "d" #'canvas-browser-scroll-up
@@ -3118,8 +3508,9 @@ keys zoom the page.  `r\=' reads the page again; `g\=' is no
 
 (defconst canvas-browser--caret-js
   (concat "(function () {
-     const version = 3;
-     if ((window.__canvasBrowserCaret || {}).version === version) return;" canvas-browser--reach-js "
+     const version = 4;
+     if ((window.__canvasBrowserCaret || {}).version === version) return;"
+          canvas-browser--reach-js canvas-browser--text-js "
      const barId = '__canvas-browser-caret';
      let colour = '#ff8c00', edge = '#000000';
      let places = [];
@@ -3198,11 +3589,6 @@ keys zoom the page.  `r\=' reads the page again; `g\=' is no
        return null;
      };
      const inView = s => { const r = caretRect(s); return r && r.top >= 0 && r.bottom <= innerHeight; };
-     const textRoots = () => {
-       const roots = [document];
-       walk(document, '*', e => { if (e.shadowRoot) roots.push(e.shadowRoot); });
-       return roots;
-     };
      const matchBox = (node, offset, length) => {
        const r = document.createRange();
        r.setStart(node, offset);
@@ -3270,8 +3656,7 @@ keys zoom the page.  `r\=' reads the page again; `g\=' is no
        return r.bottom >= 0 && r.top <= innerHeight && r.right >= 0 && r.left <= innerWidth;
      };
      const matchesIn = (node, text, fold) => {
-       const lower = node.data.toLowerCase();
-       const haystack = fold && lower.length === node.data.length ? lower : node.data;
+       const haystack = haystackOf(node.data, fold);
        if (haystack.indexOf(text) < 0) return [];
        const parent = node.parentElement || (node.parentNode && node.parentNode.host);
        if (!parent || !nearView(parent) || !seen(parent)) return [];
@@ -3314,7 +3699,7 @@ keys zoom the page.  `r\=' reads the page again; `g\=' is no
        },
        find(text) {
          if (!text) throw new Error('canvas-browser: a jump needs text to look for');
-         const fold = text === text.toLowerCase();
+         const fold = folds(text);
          places = [];
          for (const root of textRoots()) {
            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
